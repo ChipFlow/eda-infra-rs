@@ -33,12 +33,26 @@ pub fn cuda_used_total_mem(cuda_device_id: u8) -> (usize, usize) {
     (total - free, total)
 }
 
+/// Returns Metal device recommended working set size.
+///
+/// On Apple Silicon, Metal uses unified memory so this returns
+/// the recommended working set size hint from the Metal device.
+#[cfg(feature = "metal")]
+pub fn metal_recommended_working_set(metal_device_id: u8) -> usize {
+    use crate::METAL_DEVICES;
+    METAL_DEVICES[metal_device_id as usize].recommended_max_working_set_size() as usize
+}
+
 /// Get memory used on the specified universal device.
 pub fn device_mem_used(device: Device) -> usize {
     match device {
         Device::CPU => cpu_physical_mem(),
         #[cfg(feature = "cuda")]
         Device::CUDA(cuid) => cuda_used_total_mem(cuid).0,
+        // Metal uses unified memory on Apple Silicon, so GPU memory
+        // is part of system memory. Return CPU physical mem as approximation.
+        #[cfg(feature = "metal")]
+        Device::Metal(_) => cpu_physical_mem(),
     }
 }
 
@@ -55,6 +69,14 @@ pub fn log_memory_stats() {
             clilog::info!("cuda device {} memory usage: {} / {}", cuid,
                           Size::from_bytes(cuda_used),
                           Size::from_bytes(cuda_total));
+        }
+    }
+    #[cfg(feature = "metal")] {
+        for mid in 0..*crate::NUM_METAL_DEVICES {
+            let recommended = metal_recommended_working_set(mid.try_into().unwrap());
+            // Metal uses unified memory, so we report the recommended working set
+            clilog::info!("metal device {} recommended working set: {}", mid,
+                          Size::from_bytes(recommended));
         }
     }
 }

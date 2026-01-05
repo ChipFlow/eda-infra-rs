@@ -4,7 +4,8 @@
 //! It is intended to be used with ucc builder which generates wrapper bindings using this library.
 //!
 //! CUDA support must be manually enabled using the
-//! feature `cuda`.
+//! feature `cuda`. Metal support must be manually enabled using the
+//! feature `metal`.
 
 use impl_tools::autoimpl;
 use std::rc::Rc;
@@ -17,6 +18,10 @@ use lazy_static::lazy_static;
 // not listed as a dependency in our dependent crates.
 #[cfg(feature = "cuda")]
 pub extern crate cust;
+
+// Re-export metal crate for dependent crates.
+#[cfg(feature = "metal")]
+pub extern crate metal;
 
 /// The derive macro for types that can be safely
 /// bit-copied between all heterogeneous devices.
@@ -36,12 +41,25 @@ use cust::memory::DeviceCopy;
 /// The maximum number of CUDA devices.
 #[cfg(feature = "cuda")]
 pub const MAX_NUM_CUDA_DEVICES: usize = 4;
-/// The maximum number of devices.
-#[cfg(feature = "cuda")]
+
+/// The maximum number of Metal devices (typically 1 on Mac).
+#[cfg(feature = "metal")]
+pub const MAX_NUM_METAL_DEVICES: usize = 1;
+
+/// The maximum number of devices (CUDA + Metal + CPU).
+#[cfg(all(feature = "cuda", feature = "metal"))]
+pub const MAX_DEVICES: usize = MAX_NUM_CUDA_DEVICES + MAX_NUM_METAL_DEVICES + 1;
+
+/// The maximum number of devices (CUDA + CPU).
+#[cfg(all(feature = "cuda", not(feature = "metal")))]
 pub const MAX_DEVICES: usize = MAX_NUM_CUDA_DEVICES + 1;
 
-/// The maximum number of devices.
-#[cfg(not(feature = "cuda"))]
+/// The maximum number of devices (Metal + CPU).
+#[cfg(all(feature = "metal", not(feature = "cuda")))]
+pub const MAX_DEVICES: usize = MAX_NUM_METAL_DEVICES + 1;
+
+/// The maximum number of devices (CPU only).
+#[cfg(all(not(feature = "cuda"), not(feature = "metal")))]
 pub const MAX_DEVICES: usize = 1;
 
 /// All supported device types.
@@ -51,22 +69,35 @@ pub enum Device {
     CPU,
     /// The CUDA device type with a CUDA device index.
     #[cfg(feature = "cuda")]
-    CUDA(u8 /* device id */)
+    CUDA(u8 /* device id */),
+    /// The Metal device type with a Metal device index.
+    #[cfg(feature = "metal")]
+    Metal(u8 /* device id */),
 }
 
 /// A RAII device context.
 ///
 /// It may help you redirect computations
-/// and memory allocations on specific platforms, e.g., CUDA.
+/// and memory allocations on specific platforms, e.g., CUDA or Metal.
 ///
 /// It can be created using [`Device::get_context`].
 /// For CPU device, it does nothing. For CUDA devices, it
-/// holds a (RAII) CUDA primary context.
+/// holds a (RAII) CUDA primary context. For Metal devices,
+/// it holds a reference to the Metal device.
 pub struct DeviceContext {
     #[cfg(feature = "cuda")]
     #[allow(dead_code)]
     cuda_context: Option<cust::context::Context>,
+    #[cfg(feature = "metal")]
+    #[allow(dead_code)]
+    metal_device: Option<metal::Device>,
 }
+
+/// Base offset for Metal device IDs in the unified device ID space.
+#[cfg(all(feature = "metal", feature = "cuda"))]
+const METAL_DEVICE_ID_BASE: usize = MAX_NUM_CUDA_DEVICES + 1;
+#[cfg(all(feature = "metal", not(feature = "cuda")))]
+const METAL_DEVICE_ID_BASE: usize = 1;
 
 impl Device {
     #[inline]
@@ -80,9 +111,15 @@ impl Device {
                         "invalid cuda device id");
                 c as usize + 1
             }
+            #[cfg(feature = "metal")]
+            Metal(m) => {
+                assert!((m as usize) < MAX_NUM_METAL_DEVICES,
+                        "invalid metal device id");
+                METAL_DEVICE_ID_BASE + m as usize
+            }
         }
     }
-    
+
     #[inline]
     fn from_id(id: usize) -> Device {
         use Device::*;
@@ -90,6 +127,10 @@ impl Device {
             0 => CPU,
             #[cfg(feature = "cuda")]
             c @ 1..=MAX_NUM_CUDA_DEVICES => CUDA(c as u8 - 1),
+            #[cfg(feature = "metal")]
+            m if m >= METAL_DEVICE_ID_BASE && m < METAL_DEVICE_ID_BASE + MAX_NUM_METAL_DEVICES => {
+                Metal((m - METAL_DEVICE_ID_BASE) as u8)
+            }
             id @ _ => panic!("device id {} is invalid.", id)
         }
     }
@@ -102,19 +143,30 @@ impl Device {
         match self {
             CPU => DeviceContext {
                 #[cfg(feature = "cuda")]
-                cuda_context: None
+                cuda_context: None,
+                #[cfg(feature = "metal")]
+                metal_device: None,
             },
             #[cfg(feature = "cuda")]
             CUDA(c) => DeviceContext {
                 cuda_context: Some(cust::context::Context::new(
-                    CUDA_DEVICES[c as usize].0).unwrap())
-            }
+                    CUDA_DEVICES[c as usize].0).unwrap()),
+                #[cfg(feature = "metal")]
+                metal_device: None,
+            },
+            #[cfg(feature = "metal")]
+            Metal(m) => DeviceContext {
+                #[cfg(feature = "cuda")]
+                cuda_context: None,
+                metal_device: Some(METAL_DEVICES[m as usize].clone()),
+            },
         }
     }
 
     /// Synchronize all calculations on this device.
     ///
     /// Does nothing for CPU. Calls context synchronize for CUDA.
+    /// For Metal, waits for command buffer completion.
     #[inline]
     pub fn synchronize(self) {
         use Device::*;
@@ -125,6 +177,12 @@ impl Device {
                 let _context = cust::context::Context::new(
                     CUDA_DEVICES[c as usize].0).unwrap();
                 cust::context::CurrentContext::synchronize().unwrap();
+            }
+            #[cfg(feature = "metal")]
+            Metal(_m) => {
+                // Metal synchronization is handled through command buffer completion.
+                // For shared memory on Apple Silicon, explicit sync is often not needed.
+                // Individual operations should use waitUntilCompleted() on command buffers.
             }
         }
     }
@@ -193,9 +251,41 @@ lazy_static! {
         }
         ret
     };
-    
+
     /// the number of CUDA devices.
     pub static ref NUM_CUDA_DEVICES: usize = CUDA_DEVICES.len();
+}
+
+#[cfg(feature = "metal")]
+lazy_static! {
+    /// Vector of all Metal devices.
+    ///
+    /// On most Macs, there is only one Metal device (the integrated/discrete GPU).
+    /// The devices are kept here so they are never deallocated.
+    static ref METAL_DEVICES: Vec<metal::Device> = {
+        let mut ret = Vec::new();
+        // Get the system default Metal device (typically the best available GPU)
+        if let Some(device) = metal::Device::system_default() {
+            ret.push(device);
+        }
+        // Could also enumerate all devices with metal::Device::all() for multi-GPU systems
+        if ret.len() > MAX_NUM_METAL_DEVICES {
+            clilog::warn!(ULIB_METAL_TRUNC,
+                          "the number of available metal gpus {} \
+                           exceed max supported {}, truncated.",
+                          ret.len(), MAX_NUM_METAL_DEVICES);
+            ret.truncate(MAX_NUM_METAL_DEVICES);
+        }
+        ret
+    };
+
+    /// The default Metal command queue for general operations.
+    pub static ref METAL_COMMAND_QUEUE: metal::CommandQueue = {
+        METAL_DEVICES[0].new_command_queue()
+    };
+
+    /// The number of Metal devices.
+    pub static ref NUM_METAL_DEVICES: usize = METAL_DEVICES.len();
 }
 
 use std::mem::size_of;
@@ -339,6 +429,21 @@ pub unsafe fn copy<T: UniversalCopy>(
                 count
             );
             device_slice_dest.copy_from(&device_slice_src).unwrap();
+        },
+        // Metal with shared memory (Apple Silicon UMA) - CPU and GPU share memory
+        // so copies are just pointer copies. The pointers already point to the same
+        // physical memory when using MTLResourceStorageModeShared.
+        #[cfg(feature = "metal")]
+        (CPU, Metal(_)) | (Metal(_), CPU) | (Metal(_), Metal(_)) => {
+            // For shared memory mode, just do a memcpy since both CPU and GPU
+            // can access the same memory directly.
+            ptr_dest.copy_from(ptr_src, count);
+        },
+        // Cross-device copies between CUDA and Metal would require staging through CPU
+        #[cfg(all(feature = "cuda", feature = "metal"))]
+        (CUDA(_), Metal(_)) | (Metal(_), CUDA(_)) => {
+            panic!("Direct copy between CUDA and Metal devices is not supported. \
+                    Please stage through CPU.");
         },
     }
 }

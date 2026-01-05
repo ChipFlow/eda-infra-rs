@@ -13,6 +13,9 @@ use cust::memory::{ DeviceBuffer, CopyDestination };
 #[cfg(feature = "cuda")]
 use cust::context::{ Context, CurrentContext };
 
+#[cfg(feature = "metal")]
+use metal::MTLResourceOptions;
+
 /// Universal vector-like array storage.
 ///
 /// `UVec` is thread-safe (`Send` + `Sync`). Specifically, its
@@ -48,6 +51,10 @@ struct UVecInternal<T: UniversalCopy> {
     data_cpu: Option<Box<[T]>>,
     #[cfg(feature = "cuda")]
     data_cuda: [Option<DeviceBuffer<T>>; MAX_NUM_CUDA_DEVICES],
+    /// Metal buffer using shared memory (Apple Silicon UMA).
+    /// With MTLResourceStorageModeShared, CPU and GPU share the same memory.
+    #[cfg(feature = "metal")]
+    data_metal: [Option<metal::Buffer>; MAX_NUM_METAL_DEVICES],
     /// A flag array recording the data presence and dirty status.
     /// A true entry means the data is valid on that device.
     valid_flag: [bool; MAX_DEVICES],
@@ -102,6 +109,8 @@ impl<T: UniversalCopy> Default for UVec<T> {
             data_cpu: None,
             #[cfg(feature = "cuda")]
             data_cuda: Default::default(),
+            #[cfg(feature = "metal")]
+            data_metal: Default::default(),
             valid_flag: [false; MAX_DEVICES],
             read_locks: Default::default(),
             len: 0,
@@ -120,6 +129,8 @@ impl<T: UniversalCopy> From<Box<[T]>> for UVec<T> {
             data_cpu: Some(b),
             #[cfg(feature = "cuda")]
             data_cuda: Default::default(),
+            #[cfg(feature = "metal")]
+            data_metal: Default::default(),
             valid_flag,
             read_locks: Default::default(),
             len,
@@ -248,6 +259,25 @@ impl<T: UniversalCopy + Zeroable> UVecInternal<T> {
                 self.data_cuda[c as usize] =
                     Some(DeviceBuffer::zeroed(self.capacity)
                          .unwrap());
+            },
+            #[cfg(feature = "metal")]
+            Metal(m) => {
+                let device = &METAL_DEVICES[m as usize];
+                let byte_size = self.capacity * std::mem::size_of::<T>();
+                // Use shared storage mode for Apple Silicon UMA
+                let buffer = device.new_buffer(
+                    byte_size as u64,
+                    MTLResourceOptions::StorageModeShared
+                );
+                // Zero the buffer
+                unsafe {
+                    std::ptr::write_bytes(
+                        buffer.contents() as *mut u8,
+                        0,
+                        byte_size
+                    );
+                }
+                self.data_metal[m as usize] = Some(buffer);
             }
         }
     }
@@ -273,6 +303,20 @@ unsafe fn alloc_cuda_uninit<T: UniversalCopy>(
     DeviceBuffer::uninitialized(sz).unwrap()
 }
 
+#[cfg(feature = "metal")]
+#[inline]
+fn alloc_metal_uninit<T: UniversalCopy>(
+    sz: usize, dev: u8
+) -> metal::Buffer {
+    let device = &METAL_DEVICES[dev as usize];
+    let byte_size = sz * std::mem::size_of::<T>();
+    // Use shared storage mode for Apple Silicon UMA
+    device.new_buffer(
+        byte_size as u64,
+        MTLResourceOptions::StorageModeShared
+    )
+}
+
 impl<T: UniversalCopy> UVecInternal<T> {
     /// private function to allocate space for one device.
     ///
@@ -292,6 +336,11 @@ impl<T: UniversalCopy> UVecInternal<T> {
             CUDA(c) => {
                 self.data_cuda[c as usize] = Some(
                     alloc_cuda_uninit(self.capacity, c));
+            },
+            #[cfg(feature = "metal")]
+            Metal(m) => {
+                self.data_metal[m as usize] = Some(
+                    alloc_metal_uninit::<T>(self.capacity, m));
             }
         }
     }
@@ -308,6 +357,10 @@ impl<T: UniversalCopy> UVecInternal<T> {
         self.data_cpu = None;
         #[cfg(feature = "cuda")]
         for d in &mut self.data_cuda {
+            *d = None;
+        }
+        #[cfg(feature = "metal")]
+        for d in &mut self.data_metal {
             *d = None;
         }
     }
@@ -345,6 +398,20 @@ impl<T: UniversalCopy> UVecInternal<T> {
                 self.data_cuda[c].as_mut().unwrap().index(..self.len)
                     .copy_from(&old.index(..self.len))
                     .unwrap();
+            },
+            #[cfg(feature = "metal")]
+            Metal(m) => {
+                let m = m as usize;
+                let old = self.data_metal[m].take().unwrap();
+                let byte_len = self.len * std::mem::size_of::<T>();
+                self.drop_all_buf();
+                self.alloc_uninitialized(device);
+                // Copy data from old buffer to new buffer (both in shared memory)
+                std::ptr::copy_nonoverlapping(
+                    old.contents() as *const u8,
+                    self.data_metal[m].as_ref().unwrap().contents() as *mut u8,
+                    byte_len
+                );
             }
         }
         self.valid_flag.fill(false);
@@ -366,7 +433,9 @@ impl<T: UniversalCopy> UVecInternal<T> {
         let is_none = match device {
             CPU => self.data_cpu.is_none(),
             #[cfg(feature = "cuda")]
-            CUDA(c) => self.data_cuda[c as usize].is_none()
+            CUDA(c) => self.data_cuda[c as usize].is_none(),
+            #[cfg(feature = "metal")]
+            Metal(m) => self.data_metal[m as usize].is_none(),
         };
         if is_none {
             unsafe { self.alloc_uninitialized(device); }
@@ -375,6 +444,7 @@ impl<T: UniversalCopy> UVecInternal<T> {
             return
         }
         let device_valid = self.device_valid().expect("no valid dev");
+        let byte_len = self.len * std::mem::size_of::<T>();
         match (device_valid, device) {
             (CPU, CPU) => {},
             #[cfg(feature = "cuda")]
@@ -412,7 +482,51 @@ impl<T: UniversalCopy> UVecInternal<T> {
                     .copy_to(
                         &mut c2_mut.index(..self.len)
                     ).unwrap();
-            }
+            },
+            // Metal with shared memory - CPU and Metal can access the same memory
+            #[cfg(feature = "metal")]
+            (CPU, Metal(m)) => {
+                let m = m as usize;
+                // Copy from CPU to Metal buffer
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        self.data_cpu.as_ref().unwrap().as_ptr() as *const u8,
+                        self.data_metal[m].as_ref().unwrap().contents() as *mut u8,
+                        byte_len
+                    );
+                }
+            },
+            #[cfg(feature = "metal")]
+            (Metal(m), CPU) => {
+                let m = m as usize;
+                // Copy from Metal buffer to CPU
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        self.data_metal[m].as_ref().unwrap().contents() as *const u8,
+                        self.data_cpu.as_mut().unwrap().as_mut_ptr() as *mut u8,
+                        byte_len
+                    );
+                }
+            },
+            #[cfg(feature = "metal")]
+            (Metal(m1), Metal(m2)) => {
+                let (m1, m2) = (m1 as usize, m2 as usize);
+                assert_ne!(m1, m2);
+                // Copy between Metal buffers
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        self.data_metal[m1].as_ref().unwrap().contents() as *const u8,
+                        self.data_metal[m2].as_ref().unwrap().contents() as *mut u8,
+                        byte_len
+                    );
+                }
+            },
+            // Cross-device copies between CUDA and Metal not directly supported
+            #[cfg(all(feature = "cuda", feature = "metal"))]
+            (CUDA(_), Metal(_)) | (Metal(_), CUDA(_)) => {
+                panic!("Direct copy between CUDA and Metal devices is not supported. \
+                        Please stage through CPU.");
+            },
         }
         self.valid_flag[device.to_id()] = true;
     }
@@ -486,6 +600,13 @@ impl<T: UniversalCopy> UVec<T> {
                     .unwrap();
                 CurrentContext::synchronize().unwrap();
                 ret[0]
+            },
+            #[cfg(feature = "metal")]
+            Metal(m) => {
+                // Metal shared memory can be directly accessed from CPU
+                let buffer = intl.data_metal[m as usize].as_ref().unwrap();
+                let ptr = buffer.contents() as *const T;
+                unsafe { *ptr.add(idx) }
             }
         }
     }
@@ -779,7 +900,10 @@ impl<T: UniversalCopy> AsUPtr<T> for UVec<T> {
             CPU => intl.data_cpu.as_ref().unwrap().as_ptr(),
             #[cfg(feature = "cuda")]
             CUDA(c) => intl.data_cuda[c as usize].as_ref().unwrap()
-                .as_device_ptr().as_ptr()
+                .as_device_ptr().as_ptr(),
+            #[cfg(feature = "metal")]
+            Metal(m) => intl.data_metal[m as usize].as_ref().unwrap()
+                .contents() as *const T,
         }
     }
 }
@@ -797,7 +921,10 @@ impl<T: UniversalCopy> AsUPtrMut<T> for UVec<T> {
             CPU => intl.data_cpu.as_mut().unwrap().as_mut_ptr(),
             #[cfg(feature = "cuda")]
             CUDA(c) => intl.data_cuda[c as usize].as_mut().unwrap()
-                .as_device_ptr().as_mut_ptr()
+                .as_device_ptr().as_mut_ptr(),
+            #[cfg(feature = "metal")]
+            Metal(m) => intl.data_metal[m as usize].as_ref().unwrap()
+                .contents() as *mut T,
         }
     }
 }
@@ -866,9 +993,30 @@ impl<T: UniversalCopy> Clone for UVecInternal<T> {
             }
             data_cuda
         };
+        #[cfg(feature = "metal")]
+        let data_metal = {
+            let mut data_metal: [Option<metal::Buffer>; MAX_NUM_METAL_DEVICES] = Default::default();
+            for i in 0..MAX_NUM_METAL_DEVICES {
+                if valid_flag[Device::Metal(i as u8).to_id()] {
+                    let new_buf = alloc_metal_uninit::<T>(self.capacity, i as u8);
+                    let byte_len = self.len * std::mem::size_of::<T>();
+                    // Copy from old buffer to new buffer (both in shared memory)
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            self.data_metal[i].as_ref().unwrap().contents() as *const u8,
+                            new_buf.contents() as *mut u8,
+                            byte_len
+                        );
+                    }
+                    data_metal[i] = Some(new_buf);
+                }
+            }
+            data_metal
+        };
         UVecInternal {
             data_cpu,
             #[cfg(feature = "cuda")] data_cuda,
+            #[cfg(feature = "metal")] data_metal,
             valid_flag,
             read_locks: Default::default(),
             len: self.len,

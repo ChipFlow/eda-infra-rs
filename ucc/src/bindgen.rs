@@ -230,6 +230,11 @@ pub fn bindgen(source_list: impl IntoIterator<Item = impl AsRef<Path>>,
                 .or_default()
                 .push(f);
         }
+        else if f.raw_name.ends_with("_metal") {
+            ufuncs.entry(&f.raw_name[..f.raw_name.len() - 6])
+                .or_default()
+                .push(f);
+        }
     }
     #[cfg(feature = "ulib")]
     for (uf, impls) in ufuncs {
@@ -268,7 +273,17 @@ pub fn bindgen(source_list: impl IntoIterator<Item = impl AsRef<Path>>,
             }
             else if f.raw_name.ends_with("_cuda") {
                 quote!{
+                    #[cfg(feature = "cuda")]
                     ulib::Device::CUDA(_devid) => {
+                        let _context = device.get_context();
+                        unsafe { ffi::#fname(#(#calls),*) }
+                    }
+                }
+            }
+            else if f.raw_name.ends_with("_metal") {
+                quote!{
+                    #[cfg(feature = "metal")]
+                    ulib::Device::Metal(_devid) => {
                         let _context = device.get_context();
                         unsafe { ffi::#fname(#(#calls),*) }
                     }

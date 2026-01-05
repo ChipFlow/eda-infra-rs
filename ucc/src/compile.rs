@@ -3,6 +3,8 @@
 use cc::Build;
 use std::env;
 use std::path::{ Path, PathBuf };
+use std::process::Command;
+use std::fs;
 
 /// private util to add version definitions to the compiler.
 fn add_definitions(builder: &mut Build) {
@@ -125,4 +127,174 @@ pub fn cl_cuda() -> Build {
         Err(_) => Some(vec![80, 70])
     };
     cl_cuda_arch(gencode.as_deref(), ptx_arch)
+}
+
+/// Metal shader build configuration.
+///
+/// This struct provides a builder pattern for compiling Metal shaders
+/// into metallib files that can be loaded at runtime.
+pub struct MetalBuild {
+    files: Vec<PathBuf>,
+    include_dirs: Vec<PathBuf>,
+    defines: Vec<(String, Option<String>)>,
+    out_dir: PathBuf,
+    std_version: String,
+    macos_version_min: String,
+}
+
+impl MetalBuild {
+    /// Create a new Metal build configuration.
+    pub fn new() -> Self {
+        let out_dir = env::var_os("OUT_DIR").map(|v| {
+            let mut v = PathBuf::from(v);
+            v.push("ucc_metal");
+            v
+        }).unwrap_or_else(|| PathBuf::from("target/ucc_metal"));
+
+        Self {
+            files: Vec::new(),
+            include_dirs: Vec::new(),
+            defines: Vec::new(),
+            out_dir,
+            std_version: "metal3.0".to_string(),
+            macos_version_min: "14.0".to_string(),
+        }
+    }
+
+    /// Add a Metal shader file to compile.
+    pub fn file(&mut self, path: impl AsRef<Path>) -> &mut Self {
+        let path = path.as_ref();
+        println!("cargo:rerun-if-changed={}", path.display());
+        self.files.push(path.to_path_buf());
+        self
+    }
+
+    /// Add an include directory.
+    pub fn include(&mut self, path: impl AsRef<Path>) -> &mut Self {
+        self.include_dirs.push(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Add a preprocessor definition.
+    pub fn define(&mut self, name: &str, value: Option<&str>) -> &mut Self {
+        self.defines.push((name.to_string(), value.map(|s| s.to_string())));
+        self
+    }
+
+    /// Set the Metal shader language version.
+    pub fn std_version(&mut self, version: &str) -> &mut Self {
+        self.std_version = version.to_string();
+        self
+    }
+
+    /// Set the minimum macOS deployment target.
+    pub fn macos_version_min(&mut self, version: &str) -> &mut Self {
+        self.macos_version_min = version.to_string();
+        self
+    }
+
+    /// Set the output directory.
+    pub fn out_dir(&mut self, path: impl AsRef<Path>) -> &mut Self {
+        self.out_dir = path.as_ref().to_path_buf();
+        self
+    }
+
+    /// Compile the Metal shaders into a metallib file.
+    ///
+    /// Returns the path to the generated metallib file.
+    /// Also sets the METALLIB_PATH environment variable for the crate.
+    pub fn compile(&self, lib_name: &str) -> PathBuf {
+        fs::create_dir_all(&self.out_dir).expect("failed to create output directory");
+
+        let mut air_files = Vec::new();
+
+        // Compile each .metal file to .air (Apple Intermediate Representation)
+        for metal_file in &self.files {
+            let file_stem = metal_file.file_stem()
+                .expect("metal file has no stem")
+                .to_str()
+                .expect("invalid file stem");
+
+            let air_file = self.out_dir.join(format!("{}.air", file_stem));
+
+            let mut cmd = Command::new("xcrun");
+            cmd.arg("-sdk").arg("macosx")
+                .arg("metal")
+                .arg("-c")
+                .arg(format!("-std={}", self.std_version))
+                .arg(format!("-mmacosx-version-min={}", self.macos_version_min));
+
+            // Add include directories
+            for inc in &self.include_dirs {
+                cmd.arg("-I").arg(inc);
+            }
+
+            // Add defines
+            for (name, value) in &self.defines {
+                match value {
+                    Some(v) => cmd.arg(format!("-D{}={}", name, v)),
+                    None => cmd.arg(format!("-D{}", name)),
+                };
+            }
+
+            cmd.arg("-o").arg(&air_file)
+                .arg(metal_file);
+
+            let status = cmd.status()
+                .expect("failed to run metal compiler");
+
+            if !status.success() {
+                panic!("metal compiler failed for {}", metal_file.display());
+            }
+
+            air_files.push(air_file);
+        }
+
+        // Link all .air files into a single .metallib
+        let metallib_file = self.out_dir.join(format!("{}.metallib", lib_name));
+
+        let mut cmd = Command::new("xcrun");
+        cmd.arg("-sdk").arg("macosx")
+            .arg("metallib")
+            .arg("-o").arg(&metallib_file);
+
+        for air_file in &air_files {
+            cmd.arg(air_file);
+        }
+
+        let status = cmd.status()
+            .expect("failed to run metallib linker");
+
+        if !status.success() {
+            panic!("metallib linking failed");
+        }
+
+        // Export the metallib path for the crate to use
+        println!("cargo:rustc-env=METALLIB_PATH={}", metallib_file.display());
+
+        metallib_file
+    }
+}
+
+impl Default for MetalBuild {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Initialize a Metal shader compiler.
+///
+/// This returns a MetalBuild struct that can be used to configure
+/// and compile Metal shader files (.metal) into a metallib.
+///
+/// # Example
+///
+/// ```ignore
+/// let metallib_path = ucc::cl_metal()
+///     .file("csrc/kernel.metal")
+///     .include("csrc")
+///     .compile("my_shaders");
+/// ```
+pub fn cl_metal() -> MetalBuild {
+    MetalBuild::new()
 }
