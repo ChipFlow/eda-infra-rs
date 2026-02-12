@@ -1,10 +1,10 @@
 //! Memory usage profiling utilities
 
 use crate::Device;
-use size::Size;
-use memory_stats::memory_stats;
 #[cfg(feature = "cuda")]
 use cust_raw::cuMemGetInfo_v2;
+use memory_stats::memory_stats;
+use size::Size;
 
 /// Returns CPU memory usage of current process.
 ///
@@ -61,22 +61,28 @@ pub fn device_mem_used(device: Device) -> usize {
 pub fn log_memory_stats() {
     let cpu_mem = cpu_physical_mem();
     clilog::info!("cpu memory footprint: {}", Size::from_bytes(cpu_mem));
-    #[cfg(feature = "cuda")] {
+    #[cfg(feature = "cuda")]
+    {
         for cuid in 0..*crate::NUM_CUDA_DEVICES {
-            let (cuda_used, cuda_total) = cuda_used_total_mem(
-                cuid.try_into().unwrap()
+            let (cuda_used, cuda_total) = cuda_used_total_mem(cuid.try_into().unwrap());
+            clilog::info!(
+                "cuda device {} memory usage: {} / {}",
+                cuid,
+                Size::from_bytes(cuda_used),
+                Size::from_bytes(cuda_total)
             );
-            clilog::info!("cuda device {} memory usage: {} / {}", cuid,
-                          Size::from_bytes(cuda_used),
-                          Size::from_bytes(cuda_total));
         }
     }
-    #[cfg(feature = "metal")] {
+    #[cfg(feature = "metal")]
+    {
         for mid in 0..*crate::NUM_METAL_DEVICES {
             let recommended = metal_recommended_working_set(mid.try_into().unwrap());
             // Metal uses unified memory, so we report the recommended working set
-            clilog::info!("metal device {} recommended working set: {}", mid,
-                          Size::from_bytes(recommended));
+            clilog::info!(
+                "metal device {} recommended working set: {}",
+                mid,
+                Size::from_bytes(recommended)
+            );
         }
     }
 }

@@ -1,17 +1,17 @@
 //! Universal vector-like array storage [`UVec`].
 
 use super::*;
-use std::sync::Mutex;
-use std::hash::{ Hash, Hasher };
-use std::ops::{ Deref, DerefMut, Index, IndexMut };
-use std::fmt;
-use std::cell::UnsafeCell;
 use bytemuck::Zeroable;
+use std::cell::UnsafeCell;
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::ops::{Deref, DerefMut, Index, IndexMut};
+use std::sync::Mutex;
 
 #[cfg(feature = "cuda")]
-use cust::memory::{ DeviceBuffer, CopyDestination };
+use cust::context::{Context, CurrentContext};
 #[cfg(feature = "cuda")]
-use cust::context::{ Context, CurrentContext };
+use cust::memory::{CopyDestination, DeviceBuffer};
 
 #[cfg(feature = "metal")]
 use metal::MTLResourceOptions;
@@ -83,7 +83,7 @@ struct UVecInternal<T: UniversalCopy> {
 impl<T: UniversalCopy + fmt::Debug> fmt::Debug for UVec<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.len() == 0 {
-            return write!(f, "empty uvec")
+            return write!(f, "empty uvec");
         }
         let slice = self.as_ref();
         write!(f, "uvec[{}] = [", slice.len())?;
@@ -93,8 +93,7 @@ impl<T: UniversalCopy + fmt::Debug> fmt::Debug for UVec<T> {
             }
             if f.alternate() {
                 write!(f, "{:#?}", e)?;
-            }
-            else {
+            } else {
                 write!(f, "{:?}", e)?;
             }
         }
@@ -114,7 +113,7 @@ impl<T: UniversalCopy> Default for UVec<T> {
             valid_flag: [false; MAX_DEVICES],
             read_locks: Default::default(),
             len: 0,
-            capacity: 0
+            capacity: 0,
         }))
     }
 }
@@ -134,7 +133,7 @@ impl<T: UniversalCopy> From<Box<[T]>> for UVec<T> {
             valid_flag,
             read_locks: Default::default(),
             len,
-            capacity: len
+            capacity: len,
         }))
     }
 }
@@ -145,9 +144,7 @@ impl<T: UniversalCopy> UVec<T> {
     /// Safety: the given pointer must be valid for `len` elements,
     /// and can be queried from the specific device.
     #[inline]
-    pub unsafe fn from_uptr_cloned(
-        ptr: impl AsUPtr<T>, len: usize, device: Device
-    ) -> UVec<T> {
+    pub unsafe fn from_uptr_cloned(ptr: impl AsUPtr<T>, len: usize, device: Device) -> UVec<T> {
         let mut uvec = UVec::new_uninitialized(len, device);
         uvec.copy_from(device, ptr, device, len);
         uvec
@@ -187,11 +184,11 @@ impl<T: UniversalCopy> From<UVec<T>> for Vec<T> {
 mod uvec_rayon {
     use super::*;
     use rayon::prelude::*;
-    
+
     impl<'i, T: UniversalCopy + Sync + 'i> IntoParallelIterator for &'i UVec<T> {
         type Iter = <&'i [T] as IntoParallelIterator>::Iter;
         type Item = &'i T;
-        
+
         #[inline]
         fn into_par_iter(self) -> Self::Iter {
             self.as_ref().into_par_iter()
@@ -201,7 +198,7 @@ mod uvec_rayon {
     impl<'i, T: UniversalCopy + Send + 'i> IntoParallelIterator for &'i mut UVec<T> {
         type Iter = <&'i mut [T] as IntoParallelIterator>::Iter;
         type Item = &'i mut T;
-        
+
         #[inline]
         fn into_par_iter(self) -> Self::Iter {
             self.as_mut().into_par_iter()
@@ -211,7 +208,7 @@ mod uvec_rayon {
     impl<T: UniversalCopy + Send> IntoParallelIterator for UVec<T> {
         type Iter = <Vec<T> as IntoParallelIterator>::Iter;
         type Item = T;
-        
+
         #[inline]
         fn into_par_iter(self) -> Self::Iter {
             Vec::<T>::from(self).into_par_iter()
@@ -220,9 +217,7 @@ mod uvec_rayon {
 
     impl<T: UniversalCopy + Send> FromParallelIterator<T> for UVec<T> {
         #[inline]
-        fn from_par_iter<I: IntoParallelIterator<Item = T>>(
-            par_iter: I
-        ) -> Self {
+        fn from_par_iter<I: IntoParallelIterator<Item = T>>(par_iter: I) -> Self {
             Vec::from_par_iter(par_iter).into()
         }
     }
@@ -242,40 +237,27 @@ impl<T: UniversalCopy + Zeroable> UVecInternal<T> {
             CPU => {
                 use std::alloc;
                 self.data_cpu = Some(unsafe {
-                    let ptr = alloc::alloc_zeroed(
-                        alloc::Layout::array::<T>(
-                            self.capacity
-                        ).unwrap()) as *mut T;
-                    Box::from_raw(
-                        core::ptr::slice_from_raw_parts_mut(
-                            ptr, self.len))
+                    let ptr = alloc::alloc_zeroed(alloc::Layout::array::<T>(self.capacity).unwrap())
+                        as *mut T;
+                    Box::from_raw(core::ptr::slice_from_raw_parts_mut(ptr, self.len))
                     // Box::new_zeroed_slice(sz).assume_init()
                 });
-            },
+            }
             #[cfg(feature = "cuda")]
             CUDA(c) => {
-                let _context = Context::new(
-                    CUDA_DEVICES[c as usize].0).unwrap();
-                self.data_cuda[c as usize] =
-                    Some(DeviceBuffer::zeroed(self.capacity)
-                         .unwrap());
-            },
+                let _context = Context::new(CUDA_DEVICES[c as usize].0).unwrap();
+                self.data_cuda[c as usize] = Some(DeviceBuffer::zeroed(self.capacity).unwrap());
+            }
             #[cfg(feature = "metal")]
             Metal(m) => {
                 let device = &METAL_DEVICES[m as usize];
                 let byte_size = self.capacity * std::mem::size_of::<T>();
                 // Use shared storage mode for Apple Silicon UMA
-                let buffer = device.new_buffer(
-                    byte_size as u64,
-                    MTLResourceOptions::StorageModeShared
-                );
+                let buffer =
+                    device.new_buffer(byte_size as u64, MTLResourceOptions::StorageModeShared);
                 // Zero the buffer
                 unsafe {
-                    std::ptr::write_bytes(
-                        buffer.contents() as *mut u8,
-                        0,
-                        byte_size
-                    );
+                    std::ptr::write_bytes(buffer.contents() as *mut u8, 0, byte_size);
                 }
                 self.data_metal[m as usize] = Some(buffer);
             }
@@ -284,37 +266,26 @@ impl<T: UniversalCopy + Zeroable> UVecInternal<T> {
 }
 
 #[inline]
-unsafe fn alloc_cpu_uninit<T: UniversalCopy>(
-    sz: usize
-) -> Box<[T]> {
+unsafe fn alloc_cpu_uninit<T: UniversalCopy>(sz: usize) -> Box<[T]> {
     use std::alloc;
-    let ptr = alloc::alloc(alloc::Layout::array::<T>(sz).unwrap())
-        as *mut T;
+    let ptr = alloc::alloc(alloc::Layout::array::<T>(sz).unwrap()) as *mut T;
     Box::from_raw(core::ptr::slice_from_raw_parts_mut(ptr, sz))
 }
 
 #[cfg(feature = "cuda")]
 #[inline]
-unsafe fn alloc_cuda_uninit<T: UniversalCopy>(
-    sz: usize, dev: u8
-) -> DeviceBuffer<T> {
-    let _context = Context::new(CUDA_DEVICES[dev as usize].0)
-        .unwrap();
+unsafe fn alloc_cuda_uninit<T: UniversalCopy>(sz: usize, dev: u8) -> DeviceBuffer<T> {
+    let _context = Context::new(CUDA_DEVICES[dev as usize].0).unwrap();
     DeviceBuffer::uninitialized(sz).unwrap()
 }
 
 #[cfg(feature = "metal")]
 #[inline]
-fn alloc_metal_uninit<T: UniversalCopy>(
-    sz: usize, dev: u8
-) -> metal::Buffer {
+fn alloc_metal_uninit<T: UniversalCopy>(sz: usize, dev: u8) -> metal::Buffer {
     let device = &METAL_DEVICES[dev as usize];
     let byte_size = sz * std::mem::size_of::<T>();
     // Use shared storage mode for Apple Silicon UMA
-    device.new_buffer(
-        byte_size as u64,
-        MTLResourceOptions::StorageModeShared
-    )
+    device.new_buffer(byte_size as u64, MTLResourceOptions::StorageModeShared)
 }
 
 impl<T: UniversalCopy> UVecInternal<T> {
@@ -329,29 +300,29 @@ impl<T: UniversalCopy> UVecInternal<T> {
         use Device::*;
         match device {
             CPU => {
-                self.data_cpu = Some(alloc_cpu_uninit(
-                    self.capacity));
-            },
+                self.data_cpu = Some(alloc_cpu_uninit(self.capacity));
+            }
             #[cfg(feature = "cuda")]
             CUDA(c) => {
-                self.data_cuda[c as usize] = Some(
-                    alloc_cuda_uninit(self.capacity, c));
-            },
+                self.data_cuda[c as usize] = Some(alloc_cuda_uninit(self.capacity, c));
+            }
             #[cfg(feature = "metal")]
             Metal(m) => {
-                self.data_metal[m as usize] = Some(
-                    alloc_metal_uninit::<T>(self.capacity, m));
+                self.data_metal[m as usize] = Some(alloc_metal_uninit::<T>(self.capacity, m));
             }
         }
     }
-    
+
     /// private function to get one device with valid data
     #[inline]
     fn device_valid(&self) -> Option<Device> {
-        self.valid_flag.iter().enumerate().find(|(_i, v)| **v)
+        self.valid_flag
+            .iter()
+            .enumerate()
+            .find(|(_i, v)| **v)
             .map(|(i, _v)| Device::from_id(i))
     }
-    
+
     #[inline]
     fn drop_all_buf(&mut self) {
         self.data_cpu = None;
@@ -369,14 +340,13 @@ impl<T: UniversalCopy> UVecInternal<T> {
     unsafe fn realloc_uninit_nopreserve(&mut self, device: Device) {
         self.drop_all_buf();
         if self.capacity > 10000000 {
-            clilog::debug!("large realloc: capacity {}",
-                           self.capacity);
+            clilog::debug!("large realloc: capacity {}", self.capacity);
         }
         self.alloc_uninitialized(device);
         self.valid_flag.fill(false);
         self.valid_flag[device.to_id()] = true;
     }
-    
+
     #[inline]
     unsafe fn realloc_uninit_preserve(&mut self, device: Device) {
         use Device::*;
@@ -385,9 +355,8 @@ impl<T: UniversalCopy> UVecInternal<T> {
                 let old = self.data_cpu.take().unwrap();
                 self.drop_all_buf();
                 self.alloc_uninitialized(device);
-                self.data_cpu.as_mut().unwrap()[..self.len]
-                    .copy_from_slice(&old[..self.len]);
-            },
+                self.data_cpu.as_mut().unwrap()[..self.len].copy_from_slice(&old[..self.len]);
+            }
             #[cfg(feature = "cuda")]
             CUDA(c) => {
                 let _context = CUDA(c).get_context();
@@ -395,10 +364,13 @@ impl<T: UniversalCopy> UVecInternal<T> {
                 let old = self.data_cuda[c].take().unwrap();
                 self.drop_all_buf();
                 self.alloc_uninitialized(device);
-                self.data_cuda[c].as_mut().unwrap().index(..self.len)
+                self.data_cuda[c]
+                    .as_mut()
+                    .unwrap()
+                    .index(..self.len)
                     .copy_from(&old.index(..self.len))
                     .unwrap();
-            },
+            }
             #[cfg(feature = "metal")]
             Metal(m) => {
                 let m = m as usize;
@@ -410,7 +382,7 @@ impl<T: UniversalCopy> UVecInternal<T> {
                 std::ptr::copy_nonoverlapping(
                     old.contents() as *const u8,
                     self.data_metal[m].as_ref().unwrap().contents() as *mut u8,
-                    byte_len
+                    byte_len,
                 );
             }
         }
@@ -427,7 +399,7 @@ impl<T: UniversalCopy> UVecInternal<T> {
     #[inline]
     fn schedule_device_read(&mut self, device: Device) {
         if self.valid_flag[device.to_id()] {
-            return
+            return;
         }
         use Device::*;
         let is_none = match device {
@@ -438,34 +410,40 @@ impl<T: UniversalCopy> UVecInternal<T> {
             Metal(m) => self.data_metal[m as usize].is_none(),
         };
         if is_none {
-            unsafe { self.alloc_uninitialized(device); }
+            unsafe {
+                self.alloc_uninitialized(device);
+            }
         }
         if self.capacity == 0 {
-            return
+            return;
         }
         let device_valid = self.device_valid().expect("no valid dev");
         let byte_len = self.len * std::mem::size_of::<T>();
         match (device_valid, device) {
-            (CPU, CPU) => {},
+            (CPU, CPU) => {}
             #[cfg(feature = "cuda")]
             (CPU, CUDA(c)) => {
                 let _context = CUDA(c).get_context();
                 let c = c as usize;
-                self.data_cuda[c].as_mut().unwrap().index(..self.len)
-                    .copy_from(
-                        &self.data_cpu.as_ref().unwrap()[..self.len]
-                    ).unwrap();
-            },
+                self.data_cuda[c]
+                    .as_mut()
+                    .unwrap()
+                    .index(..self.len)
+                    .copy_from(&self.data_cpu.as_ref().unwrap()[..self.len])
+                    .unwrap();
+            }
             #[cfg(feature = "cuda")]
             (CUDA(c), CPU) => {
                 let _context = CUDA(c).get_context();
                 let c = c as usize;
-                self.data_cuda[c].as_ref().unwrap().index(..self.len)
-                    .copy_to(
-                        &mut self.data_cpu.as_mut().unwrap()[..self.len]
-                    ).unwrap();
+                self.data_cuda[c]
+                    .as_ref()
+                    .unwrap()
+                    .index(..self.len)
+                    .copy_to(&mut self.data_cpu.as_mut().unwrap()[..self.len])
+                    .unwrap();
                 CurrentContext::synchronize().unwrap();
-            },
+            }
             #[cfg(feature = "cuda")]
             (CUDA(c1), CUDA(c2)) => {
                 let _context = CUDA(c2).get_context();
@@ -474,15 +452,16 @@ impl<T: UniversalCopy> UVecInternal<T> {
                 // unsafe is used to access one mutable element.
                 // safety guaranteed by the above `assert_ne!`.
                 let c2_mut = unsafe {
-                    &mut *(self.data_cuda[c2].as_mut().unwrap()
-                           as *const DeviceBuffer<T>
-                           as *mut DeviceBuffer<T>)
+                    &mut *(self.data_cuda[c2].as_mut().unwrap() as *const DeviceBuffer<T>
+                        as *mut DeviceBuffer<T>)
                 };
-                self.data_cuda[c1].as_ref().unwrap().index(..self.len)
-                    .copy_to(
-                        &mut c2_mut.index(..self.len)
-                    ).unwrap();
-            },
+                self.data_cuda[c1]
+                    .as_ref()
+                    .unwrap()
+                    .index(..self.len)
+                    .copy_to(&mut c2_mut.index(..self.len))
+                    .unwrap();
+            }
             // Metal with shared memory - CPU and Metal can access the same memory
             #[cfg(feature = "metal")]
             (CPU, Metal(m)) => {
@@ -492,10 +471,10 @@ impl<T: UniversalCopy> UVecInternal<T> {
                     std::ptr::copy_nonoverlapping(
                         self.data_cpu.as_ref().unwrap().as_ptr() as *const u8,
                         self.data_metal[m].as_ref().unwrap().contents() as *mut u8,
-                        byte_len
+                        byte_len,
                     );
                 }
-            },
+            }
             #[cfg(feature = "metal")]
             (Metal(m), CPU) => {
                 let m = m as usize;
@@ -504,10 +483,10 @@ impl<T: UniversalCopy> UVecInternal<T> {
                     std::ptr::copy_nonoverlapping(
                         self.data_metal[m].as_ref().unwrap().contents() as *const u8,
                         self.data_cpu.as_mut().unwrap().as_mut_ptr() as *mut u8,
-                        byte_len
+                        byte_len,
                     );
                 }
-            },
+            }
             #[cfg(feature = "metal")]
             (Metal(m1), Metal(m2)) => {
                 let (m1, m2) = (m1 as usize, m2 as usize);
@@ -517,16 +496,18 @@ impl<T: UniversalCopy> UVecInternal<T> {
                     std::ptr::copy_nonoverlapping(
                         self.data_metal[m1].as_ref().unwrap().contents() as *const u8,
                         self.data_metal[m2].as_ref().unwrap().contents() as *mut u8,
-                        byte_len
+                        byte_len,
                     );
                 }
-            },
+            }
             // Cross-device copies between CUDA and Metal not directly supported
             #[cfg(all(feature = "cuda", feature = "metal"))]
             (CUDA(_), Metal(_)) | (Metal(_), CUDA(_)) => {
-                panic!("Direct copy between CUDA and Metal devices is not supported. \
-                        Please stage through CPU.");
-            },
+                panic!(
+                    "Direct copy between CUDA and Metal devices is not supported. \
+                        Please stage through CPU."
+                );
+            }
         }
         self.valid_flag[device.to_id()] = true;
     }
@@ -555,17 +536,12 @@ impl<T: UniversalCopy> UVec<T> {
         // safety guaranteed by the lock, and by the
         // guarantee of `schedule_device_read` that only
         // writes to fields related to the specified device.
-        let intl = unsafe {
-            self.get_intl_mut_unsafe()
-        };
-        let intl_erased = unsafe {
-            &mut *(self.get_intl_mut_unsafe() as *mut UVecInternal<T>)
-        };
+        let intl = unsafe { self.get_intl_mut_unsafe() };
+        let intl_erased = unsafe { &mut *(self.get_intl_mut_unsafe() as *mut UVecInternal<T>) };
         if intl.valid_flag[device.to_id()] {
-            return
+            return;
         }
-        let locked = intl.read_locks[device.to_id()]
-            .lock().unwrap();
+        let locked = intl.read_locks[device.to_id()].lock().unwrap();
         intl_erased.schedule_device_read(device);
         drop(locked);
     }
@@ -591,16 +567,16 @@ impl<T: UniversalCopy> UVec<T> {
             #[cfg(feature = "cuda")]
             CUDA(c) => {
                 let _context = CUDA(c).get_context();
-                let mut ret: [T; 1] = unsafe {
-                    std::mem::MaybeUninit::uninit().assume_init()
-                };
-                intl.data_cuda[c as usize].as_ref().unwrap()
+                let mut ret: [T; 1] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+                intl.data_cuda[c as usize]
+                    .as_ref()
+                    .unwrap()
                     .index(idx)
                     .copy_to(&mut ret)
                     .unwrap();
                 CurrentContext::synchronize().unwrap();
                 ret[0]
-            },
+            }
             #[cfg(feature = "metal")]
             Metal(m) => {
                 // Metal shared memory can be directly accessed from CPU
@@ -616,9 +592,7 @@ impl<T: UniversalCopy + Zeroable> UVec<T> {
     /// Create a new zeroed universal vector with specific size and
     /// capacity;
     #[inline]
-    pub fn new_zeroed_with_capacity(
-        len: usize, capacity: usize, device: Device
-    ) -> UVec<T> {
+    pub fn new_zeroed_with_capacity(len: usize, capacity: usize, device: Device) -> UVec<T> {
         let mut v: UVec<T> = Default::default();
         let intl = v.get_intl_mut();
         assert!(len <= capacity);
@@ -651,7 +625,7 @@ impl<T: UniversalCopy> UVec<T> {
     pub fn is_empty(&self) -> bool {
         self.get_intl().len == 0
     }
-    
+
     /// Get capacity of this vector.
     #[inline]
     pub fn capacity(&self) -> usize {
@@ -671,7 +645,9 @@ impl<T: UniversalCopy> UVec<T> {
     /// specific size and capacity.
     #[inline]
     pub unsafe fn new_uninitialized_with_capacity(
-        len: usize, capacity: usize, device: Device
+        len: usize,
+        capacity: usize,
+        device: Device,
     ) -> UVec<T> {
         let mut v: UVec<T> = Default::default();
         let intl = v.get_intl_mut();
@@ -686,21 +662,15 @@ impl<T: UniversalCopy> UVec<T> {
     /// Create a new uninitialized universal vector with
     /// specific size.
     #[inline]
-    pub unsafe fn new_uninitialized(
-        len: usize, device: Device
-    ) -> UVec<T> {
+    pub unsafe fn new_uninitialized(len: usize, device: Device) -> UVec<T> {
         Self::new_uninitialized_with_capacity(len, len, device)
     }
 
     /// Create a new zero length universal vector with specific
     /// initial capacity.
     #[inline]
-    pub fn with_capacity(
-        capacity: usize, device: Device
-    ) -> UVec<T> {
-        unsafe {
-            Self::new_uninitialized_with_capacity(0, capacity, device)
-        }
+    pub fn with_capacity(capacity: usize, device: Device) -> UVec<T> {
+        unsafe { Self::new_uninitialized_with_capacity(0, capacity, device) }
     }
 
     /// Force set the length of this vector.
@@ -736,10 +706,12 @@ impl<T: UniversalCopy> UVec<T> {
     pub fn reserve(&mut self, additional: usize, device: Device) {
         let intl = self.get_intl_mut();
         if intl.len + additional <= intl.capacity {
-            return
+            return;
         }
         intl.capacity = realloc_heuristic(intl.len + additional);
-        unsafe { intl.realloc_uninit_preserve(device); }
+        unsafe {
+            intl.realloc_uninit_preserve(device);
+        }
     }
 
     /// Resize the universal vector, but do **not** preserve the
@@ -797,7 +769,7 @@ impl<T: UniversalCopy> UVec<T> {
 
 impl<T: UniversalCopy> AsRef<[T]> for UVec<T> {
     /// Get a CPU slice reference.
-    /// 
+    ///
     /// This COULD fail, actually, when we need to copy from
     /// a GPU value to CPU.
     /// This violates the guideline but we have no choice.
@@ -813,7 +785,7 @@ impl<T: UniversalCopy> AsRef<[T]> for UVec<T> {
 
 impl<T: UniversalCopy> AsMut<[T]> for UVec<T> {
     /// Get a mutable CPU slice reference.
-    /// 
+    ///
     /// This COULD fail, actually, when we need to copy from
     /// a GPU value to CPU.
     /// This violates the guideline but we have no choice.
@@ -854,7 +826,10 @@ impl<T: UniversalCopy> DerefMut for UVec<T> {
     }
 }
 
-impl<T: UniversalCopy, I> Index<I> for UVec<T> where [T]: Index<I> {
+impl<T: UniversalCopy, I> Index<I> for UVec<T>
+where
+    [T]: Index<I>,
+{
     type Output = <[T] as Index<I>>::Output;
     #[inline]
     fn index(&self, i: I) -> &Self::Output {
@@ -862,7 +837,10 @@ impl<T: UniversalCopy, I> Index<I> for UVec<T> where [T]: Index<I> {
     }
 }
 
-impl<T: UniversalCopy, I> IndexMut<I> for UVec<T> where [T]: IndexMut<I> {
+impl<T: UniversalCopy, I> IndexMut<I> for UVec<T>
+where
+    [T]: IndexMut<I>,
+{
     #[inline]
     fn index_mut(&mut self, i: I) -> &mut Self::Output {
         self.as_mut().index_mut(i)
@@ -891,7 +869,7 @@ impl<T: UniversalCopy> AsUPtr<T> for UVec<T> {
     #[inline]
     fn as_uptr(&self, device: Device) -> *const T {
         if self.capacity() == 0 {
-            return std::ptr::null()
+            return std::ptr::null();
         }
         self.schedule_device_read_ro(device);
         let intl = self.get_intl();
@@ -899,11 +877,13 @@ impl<T: UniversalCopy> AsUPtr<T> for UVec<T> {
         match device {
             CPU => intl.data_cpu.as_ref().unwrap().as_ptr(),
             #[cfg(feature = "cuda")]
-            CUDA(c) => intl.data_cuda[c as usize].as_ref().unwrap()
-                .as_device_ptr().as_ptr(),
+            CUDA(c) => intl.data_cuda[c as usize]
+                .as_ref()
+                .unwrap()
+                .as_device_ptr()
+                .as_ptr(),
             #[cfg(feature = "metal")]
-            Metal(m) => intl.data_metal[m as usize].as_ref().unwrap()
-                .contents() as *const T,
+            Metal(m) => intl.data_metal[m as usize].as_ref().unwrap().contents() as *const T,
         }
     }
 }
@@ -912,7 +892,7 @@ impl<T: UniversalCopy> AsUPtrMut<T> for UVec<T> {
     #[inline]
     fn as_mut_uptr(&mut self, device: Device) -> *mut T {
         if self.capacity() == 0 {
-            return std::ptr::null_mut()
+            return std::ptr::null_mut();
         }
         self.schedule_device_write(device);
         let intl = self.get_intl_mut();
@@ -920,11 +900,13 @@ impl<T: UniversalCopy> AsUPtrMut<T> for UVec<T> {
         match device {
             CPU => intl.data_cpu.as_mut().unwrap().as_mut_ptr(),
             #[cfg(feature = "cuda")]
-            CUDA(c) => intl.data_cuda[c as usize].as_mut().unwrap()
-                .as_device_ptr().as_mut_ptr(),
+            CUDA(c) => intl.data_cuda[c as usize]
+                .as_mut()
+                .unwrap()
+                .as_device_ptr()
+                .as_mut_ptr(),
             #[cfg(feature = "metal")]
-            Metal(m) => intl.data_metal[m as usize].as_ref().unwrap()
-                .contents() as *mut T,
+            Metal(m) => intl.data_metal[m as usize].as_ref().unwrap().contents() as *mut T,
         }
     }
 }
@@ -955,28 +937,29 @@ impl<T: UniversalCopy + Hash> Hash for UVec<T> {
 }
 
 impl<T: UniversalCopy, U: UniversalCopy> PartialEq<UVec<U>> for UVec<T>
-    where T: PartialEq<U>
+where
+    T: PartialEq<U>,
 {
     #[inline]
     fn eq(&self, other: &UVec<U>) -> bool {
         if self.len() != other.len() {
-            return false
+            return false;
         }
         if self.is_empty() {
-            return true
+            return true;
         }
         self.as_ref() == other.as_ref()
     }
 }
 
-impl<T: UniversalCopy + Eq> Eq for UVec<T> { }
+impl<T: UniversalCopy + Eq> Eq for UVec<T> {}
 
 impl<T: UniversalCopy> Clone for UVecInternal<T> {
     fn clone(&self) -> Self {
         let valid_flag = self.valid_flag.clone();
         let data_cpu = match valid_flag[Device::CPU.to_id()] {
             true => self.data_cpu.clone(),
-            false => None
+            false => None,
         };
         #[cfg(feature = "cuda")]
         let data_cuda = unsafe {
@@ -985,7 +968,10 @@ impl<T: UniversalCopy> Clone for UVecInternal<T> {
                 if valid_flag[Device::CUDA(i as u8).to_id()] {
                     let _context = Device::CUDA(i as u8).get_context();
                     let dbuf = alloc_cuda_uninit(self.capacity, i as u8);
-                    self.data_cuda[i].as_ref().unwrap().index(..self.len)
+                    self.data_cuda[i]
+                        .as_ref()
+                        .unwrap()
+                        .index(..self.len)
                         .copy_to(&mut dbuf.index(..self.len))
                         .unwrap();
                     data_cuda[i] = Some(dbuf);
@@ -1005,7 +991,7 @@ impl<T: UniversalCopy> Clone for UVecInternal<T> {
                         std::ptr::copy_nonoverlapping(
                             self.data_metal[i].as_ref().unwrap().contents() as *const u8,
                             new_buf.contents() as *mut u8,
-                            byte_len
+                            byte_len,
                         );
                     }
                     data_metal[i] = Some(new_buf);
@@ -1015,12 +1001,14 @@ impl<T: UniversalCopy> Clone for UVecInternal<T> {
         };
         UVecInternal {
             data_cpu,
-            #[cfg(feature = "cuda")] data_cuda,
-            #[cfg(feature = "metal")] data_metal,
+            #[cfg(feature = "cuda")]
+            data_cuda,
+            #[cfg(feature = "metal")]
+            data_metal,
             valid_flag,
             read_locks: Default::default(),
             len: self.len,
-            capacity: self.capacity
+            capacity: self.capacity,
         }
     }
 }

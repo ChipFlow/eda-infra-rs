@@ -87,12 +87,12 @@
 //! assert_eq!(value, data);
 //! ```
 
+use bitvec::prelude::*;
+use compact_str::CompactString;
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::io;
 use std::str::FromStr;
-use compact_str::CompactString;
-use bitvec::prelude::*;
 
 mod read;
 pub use read::Parser;
@@ -104,7 +104,7 @@ mod idcode;
 pub use idcode::IdCode;
 
 mod fastflow;
-pub use fastflow::{ FastFlow, FastFlowToken, FFValueChange };
+pub use fastflow::{FFValueChange, FastFlow, FastFlowToken};
 
 /// Error wrapping a static string message explaining why parsing failed.
 #[derive(Debug)]
@@ -154,11 +154,7 @@ impl FromStr for TimescaleUnit {
 
 impl Display for TimescaleUnit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            self.as_str()
-        )
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -187,7 +183,7 @@ impl TimescaleUnit {
             US => "us",
             NS => "ns",
             PS => "ps",
-            FS => "fs"
+            FS => "fs",
         }
     }
 }
@@ -277,13 +273,13 @@ impl Display for Value {
 #[derive(PartialEq, Clone)]
 pub struct VecValue {
     is_01: BitVec,
-    is_xz: BitVec
+    is_xz: BitVec,
 }
 
 /// An iterator over bits in a [`VecValue`].
 pub struct VecValueIter<'i> {
     is_01_iter: bitvec::slice::BitValIter<'i, usize, Lsb0>,
-    is_xz_iter: bitvec::slice::BitValIter<'i, usize, Lsb0>
+    is_xz_iter: bitvec::slice::BitValIter<'i, usize, Lsb0>,
 }
 
 impl<'i> Iterator for VecValueIter<'i> {
@@ -306,7 +302,7 @@ impl<'i> IntoIterator for &'i VecValue {
         // VecValueIter { i: 0, v: self }
         VecValueIter {
             is_01_iter: self.is_01.iter().by_vals(),
-            is_xz_iter: self.is_xz.iter().by_vals()
+            is_xz_iter: self.is_xz.iter().by_vals(),
         }
     }
 }
@@ -327,7 +323,7 @@ impl VecValue {
     pub fn new() -> VecValue {
         VecValue {
             is_01: BitVec::new(),
-            is_xz: BitVec::new()
+            is_xz: BitVec::new(),
         }
     }
 
@@ -337,7 +333,7 @@ impl VecValue {
         let (is_01, is_xz) = value.as_01xz();
         VecValue {
             is_01: BitVec::repeat(is_01, len),
-            is_xz: BitVec::repeat(is_xz, len)
+            is_xz: BitVec::repeat(is_xz, len),
         }
     }
 

@@ -3,7 +3,7 @@
 /// A simple implementation of a union-find set (disjoint set).
 /// We extend it with the ability to track two special sets:
 /// Net-0 and Net-1.
-/// 
+///
 /// It is expected to run in `O(log n)` time, because we do not
 /// use *union by size/rank* trick to optimize it -- this is
 /// hopefully because nets are small.
@@ -13,17 +13,17 @@
 pub struct DisjointSet {
     fa: Vec<usize>,
     value_zero: Option<usize>,
-    value_one: Option<usize>
+    value_one: Option<usize>,
 }
 
 impl DisjointSet {
     /// Create a disjoint set with certain pre-allocated
     /// memory space.
     pub fn with_capacity(c: usize) -> DisjointSet {
-        DisjointSet{
+        DisjointSet {
             fa: Vec::with_capacity(c),
             value_zero: None,
-            value_one: None
+            value_one: None,
         }
     }
 
@@ -75,10 +75,10 @@ impl DisjointSet {
     ///
     /// Currently, this consumes the whole disjoint set object to
     /// warn user that it is an expensive operation.
-    pub fn finalize(mut self, num_nodes: usize) -> Option<(
-        usize, Vec<usize>,
-        Option<usize>, Option<usize>
-    )> {
+    pub fn finalize(
+        mut self,
+        num_nodes: usize,
+    ) -> Option<(usize, Vec<usize>, Option<usize>, Option<usize>)> {
         self.fa.truncate(num_nodes);
         self.fa.extend(self.fa.len()..num_nodes);
 
@@ -100,10 +100,9 @@ impl DisjointSet {
         let id_one = self.value_one.map(|i| set_indices[i]);
         if matches!((id_zero, id_one), (Some(a), Some(b)) if a == b) {
             clilog::error!(NL_SV_LIT, "Constant zero and one connected");
-            return None
+            return None;
         }
-        
+
         Some((num_sets, set_indices, id_zero, id_one))
     }
 }
-

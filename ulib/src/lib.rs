@@ -32,7 +32,7 @@ pub use bytemuck::Zeroable;
 
 /// The derive macro for zeroable types.
 /// see [original docs online](https://docs.rs/zeroable/latest/zeroable/zeroable_docs/index.html).
-/// 
+///
 pub use ulib_zeroable_derive::Zeroable;
 
 #[cfg(feature = "cuda")]
@@ -107,14 +107,18 @@ impl Device {
             CPU => 0,
             #[cfg(feature = "cuda")]
             CUDA(c) => {
-                assert!((c as usize) < MAX_NUM_CUDA_DEVICES,
-                        "invalid cuda device id");
+                assert!(
+                    (c as usize) < MAX_NUM_CUDA_DEVICES,
+                    "invalid cuda device id"
+                );
                 c as usize + 1
             }
             #[cfg(feature = "metal")]
             Metal(m) => {
-                assert!((m as usize) < MAX_NUM_METAL_DEVICES,
-                        "invalid metal device id");
+                assert!(
+                    (m as usize) < MAX_NUM_METAL_DEVICES,
+                    "invalid metal device id"
+                );
                 METAL_DEVICE_ID_BASE + m as usize
             }
         }
@@ -131,7 +135,7 @@ impl Device {
             m if m >= METAL_DEVICE_ID_BASE && m < METAL_DEVICE_ID_BASE + MAX_NUM_METAL_DEVICES => {
                 Metal((m - METAL_DEVICE_ID_BASE) as u8)
             }
-            id @ _ => panic!("device id {} is invalid.", id)
+            id @ _ => panic!("device id {} is invalid.", id),
         }
     }
 
@@ -149,8 +153,9 @@ impl Device {
             },
             #[cfg(feature = "cuda")]
             CUDA(c) => DeviceContext {
-                cuda_context: Some(cust::context::Context::new(
-                    CUDA_DEVICES[c as usize].0).unwrap()),
+                cuda_context: Some(
+                    cust::context::Context::new(CUDA_DEVICES[c as usize].0).unwrap(),
+                ),
                 #[cfg(feature = "metal")]
                 metal_device: None,
             },
@@ -171,11 +176,10 @@ impl Device {
     pub fn synchronize(self) {
         use Device::*;
         match self {
-            CPU => {},
+            CPU => {}
             #[cfg(feature = "cuda")]
             CUDA(c) => {
-                let _context = cust::context::Context::new(
-                    CUDA_DEVICES[c as usize].0).unwrap();
+                let _context = cust::context::Context::new(CUDA_DEVICES[c as usize].0).unwrap();
                 cust::context::CurrentContext::synchronize().unwrap();
             }
             #[cfg(feature = "metal")]
@@ -195,7 +199,7 @@ impl Device {
 ///
 /// ```
 /// use ulib::UniversalCopy;
-/// 
+///
 /// #[derive(UniversalCopy, Clone)]
 /// struct Test {
 ///     a: i32,
@@ -203,9 +207,9 @@ impl Device {
 /// }
 /// ```
 #[cfg(feature = "cuda")]
-pub trait UniversalCopy: Copy + DeviceCopy { }
+pub trait UniversalCopy: Copy + DeviceCopy {}
 #[cfg(feature = "cuda")]
-impl<T: Copy + DeviceCopy> UniversalCopy for T { }
+impl<T: Copy + DeviceCopy> UniversalCopy for T {}
 
 /// Trait for types that can be safely bit-copied between
 /// all heterogeneous devices.
@@ -215,7 +219,7 @@ impl<T: Copy + DeviceCopy> UniversalCopy for T { }
 ///
 /// ```
 /// use ulib::UniversalCopy;
-/// 
+///
 /// #[derive(UniversalCopy, Clone)]
 /// struct Test {
 ///     a: i32,
@@ -223,9 +227,9 @@ impl<T: Copy + DeviceCopy> UniversalCopy for T { }
 /// }
 /// ```
 #[cfg(not(feature = "cuda"))]
-pub trait UniversalCopy: Copy { }
+pub trait UniversalCopy: Copy {}
 #[cfg(not(feature = "cuda"))]
-impl<T: Copy> UniversalCopy for T { }
+impl<T: Copy> UniversalCopy for T {}
 
 #[cfg(feature = "cuda")]
 lazy_static! {
@@ -311,7 +315,7 @@ pub trait AsUPtrMut<T: UniversalCopy> {
     /// Fill the memory with given value.
     #[inline]
     fn fill_len(&mut self, value: T, len: usize, device: Device) {
-        let mut v = unsafe {UVec::new_uninitialized(1, Device::CPU)};
+        let mut v = unsafe { UVec::new_uninitialized(1, Device::CPU) };
         v[0] = value;
 
         macro_rules! match_size {
@@ -364,8 +368,11 @@ pub trait AsUPtrMut<T: UniversalCopy> {
     /// The argument orders are the reverse of [`copy`].
     #[inline]
     unsafe fn copy_from(
-        &mut self, dest_device: Device,
-        src: impl AsUPtr<T>, src_device: Device, count: usize,
+        &mut self,
+        dest_device: Device,
+        src: impl AsUPtr<T>,
+        src_device: Device,
+        count: usize,
     ) {
         copy(src, src_device, self, dest_device, count);
     }
@@ -378,58 +385,58 @@ pub trait AsUPtrMut<T: UniversalCopy> {
 /// except two device annotations are provided. See safety
 /// instructions there.
 pub unsafe fn copy<T: UniversalCopy>(
-    src: impl AsUPtr<T>, src_device: Device,
-    mut dest: impl AsUPtrMut<T>, dest_device: Device,
-    count: usize
+    src: impl AsUPtr<T>,
+    src_device: Device,
+    mut dest: impl AsUPtrMut<T>,
+    dest_device: Device,
+    count: usize,
 ) {
-    if count == 0 { return }
+    if count == 0 {
+        return;
+    }
     let ptr_dest = dest.as_mut_uptr(dest_device);
     let ptr_src = src.as_uptr(src_device);
-    use Device::*;
     #[cfg(feature = "cuda")]
     use cust::{
-        memory::{DeviceSlice, DevicePointer, CopyDestination},
         context::CurrentContext,
-        sys::CUdeviceptr
+        memory::{CopyDestination, DevicePointer, DeviceSlice},
+        sys::CUdeviceptr,
     };
+    use Device::*;
     match (dest_device, src_device) {
         (CPU, CPU) => {
             ptr_dest.copy_from(ptr_src, count);
-        },
+        }
         #[cfg(feature = "cuda")]
         (CPU, CUDA(c)) => {
             let _context = CUDA(c).get_context();
-            let device_slice_src = DeviceSlice::from_raw_parts(
-                DevicePointer::from_raw(ptr_src as CUdeviceptr),
-                count
-            );
+            let device_slice_src =
+                DeviceSlice::from_raw_parts(DevicePointer::from_raw(ptr_src as CUdeviceptr), count);
             let slice_dest = std::slice::from_raw_parts_mut(ptr_dest, count);
             device_slice_src.copy_to(slice_dest).unwrap();
             CurrentContext::synchronize().unwrap();
-        },
+        }
         #[cfg(feature = "cuda")]
         (CUDA(c), CPU) => {
             let _context = CUDA(c).get_context();
             let mut device_slice_dest = DeviceSlice::from_raw_parts_mut(
                 DevicePointer::from_raw(ptr_dest as CUdeviceptr),
-                count
+                count,
             );
             let slice_src = std::slice::from_raw_parts(ptr_src, count);
             device_slice_dest.copy_from(slice_src).unwrap();
-        },
+        }
         #[cfg(feature = "cuda")]
         (CUDA(c1), CUDA(_c2)) => {
             let _context = CUDA(c1).get_context();
             let mut device_slice_dest = DeviceSlice::<T>::from_raw_parts_mut(
                 DevicePointer::from_raw(ptr_dest as CUdeviceptr),
-                count
+                count,
             );
-            let device_slice_src = DeviceSlice::from_raw_parts(
-                DevicePointer::from_raw(ptr_src as CUdeviceptr),
-                count
-            );
+            let device_slice_src =
+                DeviceSlice::from_raw_parts(DevicePointer::from_raw(ptr_src as CUdeviceptr), count);
             device_slice_dest.copy_from(&device_slice_src).unwrap();
-        },
+        }
         // Metal with shared memory (Apple Silicon UMA) - CPU and GPU share memory
         // so copies are just pointer copies. The pointers already point to the same
         // physical memory when using MTLResourceStorageModeShared.
@@ -438,13 +445,15 @@ pub unsafe fn copy<T: UniversalCopy>(
             // For shared memory mode, just do a memcpy since both CPU and GPU
             // can access the same memory directly.
             ptr_dest.copy_from(ptr_src, count);
-        },
+        }
         // Cross-device copies between CUDA and Metal would require staging through CPU
         #[cfg(all(feature = "cuda", feature = "metal"))]
         (CUDA(_), Metal(_)) | (Metal(_), CUDA(_)) => {
-            panic!("Direct copy between CUDA and Metal devices is not supported. \
-                    Please stage through CPU.");
-        },
+            panic!(
+                "Direct copy between CUDA and Metal devices is not supported. \
+                    Please stage through CPU."
+            );
+        }
     }
 }
 
@@ -452,6 +461,6 @@ mod uvec;
 pub use uvec::UVec;
 
 mod raw_ptr;
-pub use raw_ptr::{ RawUPtr, RawUPtrMut, NullUPtr };
+pub use raw_ptr::{NullUPtr, RawUPtr, RawUPtrMut};
 
 pub mod profile;

@@ -21,15 +21,15 @@
 //!    unless one user becomes insane and defines a million-sized
 //!    bit vector.
 
-use crate::{ IdCode, InvalidData };
-use std::io::{ self, Read };
+use crate::{IdCode, InvalidData};
 use linereader::LineReader;
+use std::io::{self, Read};
 
 /// An enum of tokens that fast flow supports.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum FastFlowToken<'i> {
     Timestamp(u64),
-    Value(FFValueChange<'i>)
+    Value(FFValueChange<'i>),
 }
 
 /// A value change token.
@@ -42,7 +42,7 @@ pub struct FFValueChange<'i> {
     pub id: IdCode,
     /// A byte slice of signal changes. Each byte can be
     /// `0`, `1`, `x`, or `z`.
-    pub bits: &'i [u8]
+    pub bits: &'i [u8],
 }
 
 /// Fast token stream of timestamp and value changes.
@@ -51,7 +51,7 @@ pub struct FastFlow<R: Read> {
     /// The line reader inner object
     line_reader: LineReader<R>,
     /// The bytes already read since the start.
-    bytes_read: usize
+    bytes_read: usize,
 }
 
 impl<R: Read> FastFlow<R> {
@@ -63,7 +63,7 @@ impl<R: Read> FastFlow<R> {
     pub fn new(source: R, buf_size: usize) -> FastFlow<R> {
         FastFlow {
             line_reader: LineReader::with_capacity(buf_size, source),
-            bytes_read: 0
+            bytes_read: 0,
         }
     }
 
@@ -103,30 +103,33 @@ impl<R: Read> FastFlow<R> {
             // As a result, we cannot return the value to outside.
             // This is known as a limitation of current Rust borrow checker.
             // See https://github.com/rust-lang/rust/issues/68117.
-            &mut *(self as *mut FastFlow<R>)  // kicks off the lifetime
-            // We are safe as long as the reference next_line() returns
-            // can outlive 'i **in reality**.
-        }.next_line()? {
+            &mut *(self as *mut FastFlow<R>) // kicks off the lifetime
+                                             // We are safe as long as the reference next_line() returns
+                                             // can outlive 'i **in reality**.
+        }
+        .next_line()?
+        {
             let line: &'i [u8] = line;
             // ok, we are safe now with the assumption above.
-            
-            if line.len() == 0 { continue }
+
+            if line.len() == 0 {
+                continue;
+            }
             return Ok(Some(match line[0] {
                 b'#' => FastFlowToken::Timestamp(
-                    atoi_radix10::parse(&line[1..]).map_err(
-                        |_| io::Error::from(InvalidData("parse timestamp failed")))?
+                    atoi_radix10::parse(&line[1..])
+                        .map_err(|_| io::Error::from(InvalidData("parse timestamp failed")))?,
                 ),
-                b'0' | b'1' | b'x' | b'z' => FastFlowToken::Value(
-                    FFValueChange { id: IdCode::new(&line[1..])?,
-                                    bits: &line[0..1] }
-                ),
+                b'0' | b'1' | b'x' | b'z' => FastFlowToken::Value(FFValueChange {
+                    id: IdCode::new(&line[1..])?,
+                    bits: &line[0..1],
+                }),
                 b'b' => match line.iter().rposition(|c| *c == b' ') {
                     Some(i) => FastFlowToken::Value(FFValueChange {
                         id: IdCode::new(&line[i + 1..])?,
-                        bits: &line[1..i]
+                        bits: &line[1..i],
                     }),
-                    None => return Err(
-                        InvalidData("vec value w/o space").into())
+                    None => return Err(InvalidData("vec value w/o space").into()),
                 },
                 b'r' => continue, // skip real values
                 b'$' | b'\t' | b' ' => continue,
@@ -134,9 +137,11 @@ impl<R: Read> FastFlow<R> {
                     return Err(InvalidData(
                         "unexpected line in vcd, which is unrecognized \
                          by FastFlow. please try normal parser \
-                         instead.").into())
+                         instead.",
+                    )
+                    .into())
                 }
-            }))
+            }));
         }
         Ok(None) // EOF
     }
@@ -149,9 +154,12 @@ impl<R: Read> FastFlow<R> {
     pub fn first_timestamp(&mut self) -> io::Result<Option<u64>> {
         self.next_line()?;
         while let Some(line) = self.next_line()? {
-            if line.len() == 0 || line[0] != b'#' { continue }
+            if line.len() == 0 || line[0] != b'#' {
+                continue;
+            }
             return Ok(Some(atoi_radix10::parse::<u64>(&line[1..]).map_err(
-                |_| io::Error::from(InvalidData("parse first timestamp failed")))?))
+                |_| io::Error::from(InvalidData("parse first timestamp failed")),
+            )?));
         }
         Ok(None) // EOF before even a first timestamp.
     }
@@ -179,28 +187,42 @@ bxxxx $o
 "###;
     let mut f = FastFlow::new(&buf[..], 64);
     assert_eq!(f.first_timestamp().unwrap(), Some(0));
-    assert_eq!(f.next_token().unwrap(),
-               Some(FastFlowToken::Value(FFValueChange {
-                   id: IdCode::new(&b"$Q"[..]).unwrap(), bits: b"0"
-               })));
-    assert_eq!(f.next_token().unwrap(),
-               Some(FastFlowToken::Value(FFValueChange {
-                   id: IdCode::new(&b"\"#o"[..]).unwrap(), bits: b"0"
-               })));
-    assert_eq!(f.next_token().unwrap(),
-               Some(FastFlowToken::Timestamp(250)));
-    assert_eq!(f.next_token().unwrap(),
-               Some(FastFlowToken::Value(FFValueChange {
-                   id: IdCode::new(&b"!"[..]).unwrap(), bits: b"1"
-               })));
-    assert_eq!(f.next_token().unwrap(),
-               Some(FastFlowToken::Value(FFValueChange {
-                   id: IdCode::new(&b"#0"[..]).unwrap(), bits: b"00000000000000000000000000000000"
-               })));
-    assert_eq!(f.next_token().unwrap(),
-               Some(FastFlowToken::Value(FFValueChange {
-                   id: IdCode::new(&b"$o"[..]).unwrap(), bits: b"xxxx"
-               })));
+    assert_eq!(
+        f.next_token().unwrap(),
+        Some(FastFlowToken::Value(FFValueChange {
+            id: IdCode::new(&b"$Q"[..]).unwrap(),
+            bits: b"0"
+        }))
+    );
+    assert_eq!(
+        f.next_token().unwrap(),
+        Some(FastFlowToken::Value(FFValueChange {
+            id: IdCode::new(&b"\"#o"[..]).unwrap(),
+            bits: b"0"
+        }))
+    );
+    assert_eq!(f.next_token().unwrap(), Some(FastFlowToken::Timestamp(250)));
+    assert_eq!(
+        f.next_token().unwrap(),
+        Some(FastFlowToken::Value(FFValueChange {
+            id: IdCode::new(&b"!"[..]).unwrap(),
+            bits: b"1"
+        }))
+    );
+    assert_eq!(
+        f.next_token().unwrap(),
+        Some(FastFlowToken::Value(FFValueChange {
+            id: IdCode::new(&b"#0"[..]).unwrap(),
+            bits: b"00000000000000000000000000000000"
+        }))
+    );
+    assert_eq!(
+        f.next_token().unwrap(),
+        Some(FastFlowToken::Value(FFValueChange {
+            id: IdCode::new(&b"$o"[..]).unwrap(),
+            bits: b"xxxx"
+        }))
+    );
     assert_eq!(f.next_token().unwrap(), None);
     assert_eq!(f.bytes_read(), buf.len());
 }

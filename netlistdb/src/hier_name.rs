@@ -1,11 +1,11 @@
 //! Implementation of a tree-like hierarchical name structure.
 
+use compact_str::CompactString;
+use dyn_iter::{DynIter, IntoDynIterator};
+use itertools::Itertools;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
-use compact_str::CompactString;
-use itertools::Itertools;
-use dyn_iter::{ DynIter, IntoDynIterator };
 
 /// Hierarchical name representation.
 #[derive(PartialEq, Eq, Clone)]
@@ -27,7 +27,7 @@ impl<'i> Iterator for HierNameRevIter<'i> {
     fn next(&mut self) -> Option<&'i CompactString> {
         let name = self.0?;
         if name.cur.len() == 0 {
-            return None
+            return None;
         }
         let ret = &name.cur;
         self.0 = name.prev.as_ref().map(|a| a.as_ref());
@@ -46,10 +46,10 @@ impl<'i> IntoIterator for &'i HierName {
 }
 
 /// Hashing a HierName.
-/// 
+///
 /// Our guarantee here is that
 /// `Hash(HierName[a/b/c]) :== Hash(c, b, a)`.
-/// 
+///
 /// This is essential for different HierName implementations
 /// to agree with each other on hash values.
 /// One can find a tricky example in SPEF parser's HierName.
@@ -69,7 +69,10 @@ impl HierName {
 
     #[inline]
     pub const fn empty() -> Self {
-        HierName { cur: CompactString::new_inline(""), prev: None }
+        HierName {
+            cur: CompactString::new_inline(""),
+            prev: None,
+        }
     }
 
     #[inline]
@@ -92,16 +95,20 @@ impl HierName {
     /// ```
     #[inline]
     pub fn from_topdown_hier_iter<I: Into<CompactString>>(
-        iter: impl IntoIterator<Item = I>
+        iter: impl IntoIterator<Item = I>,
     ) -> HierName {
         let mut ret = HierName::empty();
         for ident in iter {
             if ret.is_empty() {
-                ret = HierName { cur: ident.into(), prev: None };
-            }
-            else {
-                ret = HierName { cur: ident.into(),
-                                 prev: Some(Arc::from(ret)) };
+                ret = HierName {
+                    cur: ident.into(),
+                    prev: None,
+                };
+            } else {
+                ret = HierName {
+                    cur: ident.into(),
+                    prev: Some(Arc::from(ret)),
+                };
             }
         }
         ret
@@ -127,32 +134,34 @@ impl fmt::Debug for HierName {
 
 #[test]
 fn test_hier_name() {
-    let h1 = Arc::from(HierName{
+    let h1 = Arc::from(HierName {
         cur: CompactString::new_inline("top"),
-        prev: None
+        prev: None,
     });
-    let h2 = Arc::from(HierName{
+    let h2 = Arc::from(HierName {
         cur: CompactString::new_inline("mod1"),
-        prev: Some(h1.clone())
+        prev: Some(h1.clone()),
     });
-    let h3 = Arc::from(HierName{
+    let h3 = Arc::from(HierName {
         cur: CompactString::new_inline("leaf1"),
-        prev: Some(h2.clone())
+        prev: Some(h2.clone()),
     });
-    let h3_ = Arc::from(HierName{
+    let h3_ = Arc::from(HierName {
         cur: CompactString::new_inline("leaf2"),
-        prev: Some(h2.clone())
+        prev: Some(h2.clone()),
     });
     assert_eq!(format!("{}", h3), "top/mod1/leaf1");
     assert_eq!(format!("{:?}", h3_), "HierName(top/mod1/leaf2)");
-    assert_eq!(h3.iter().map(|a| a.as_ref()).collect::<Vec<&str>>(),
-               vec!["leaf1", "mod1", "top"]);
+    assert_eq!(
+        h3.iter().map(|a| a.as_ref()).collect::<Vec<&str>>(),
+        vec!["leaf1", "mod1", "top"]
+    );
 }
 
 /// We use this to unify netlistdb::HierName and other
 /// implementations, such as
 /// spefparse::HierName, sdfparse::SDFPath, etc.
-/// 
+///
 /// See a great post on this:
 /// <https://stackoverflow.com/questions/45786717/how-to-implement-hashmap-with-two-keys>
 pub trait GeneralHierName {
@@ -167,9 +176,10 @@ pub trait GeneralHierName {
 }
 
 impl<T, S> GeneralHierName for T
-where for<'i> &'i T: IntoIterator<Item = &'i S>,
-      T: Hash,
-      S: AsRef<str>
+where
+    for<'i> &'i T: IntoIterator<Item = &'i S>,
+    T: Hash,
+    S: AsRef<str>,
 {
     #[inline]
     fn ident_iter(&self) -> DynIter<&str> {
@@ -187,7 +197,7 @@ impl Hash for dyn GeneralHierName + '_ {
 
 // Below won't work because it trips over the orphan rule.
 // See this answer: https://stackoverflow.com/a/63131661/11815215
-// 
+//
 // impl<T: GeneralHierName> std::borrow::Borrow<dyn GeneralHierName> for T {
 //     #[inline]
 //     fn borrow(&self) -> &dyn GeneralHierName {
@@ -228,21 +238,25 @@ pub trait GeneralPinName {
     /// Format any pin name to `a/b/c:d[0]`-like `String`, for debugging.
     fn dbg_fmt_pin(&self) -> String {
         let hier = self.hierarchy().dbg_fmt_hier();
-        format!("{}{}{}",
-                match hier.is_empty() {
-                    true => "".to_string(),
-                    false => format!("{}:", hier)
-                },
-                self.pin_type(),
-                match self.bus_id() {
-                    None => "".to_string(),
-                    Some(id) => format!("[{}]", id)
-                })
+        format!(
+            "{}{}{}",
+            match hier.is_empty() {
+                true => "".to_string(),
+                false => format!("{}:", hier),
+            },
+            self.pin_type(),
+            match self.bus_id() {
+                None => "".to_string(),
+                Some(id) => format!("[{}]", id),
+            }
+        )
     }
 }
 
 impl<C, S> GeneralPinName for (C, S, Option<isize>)
-where C: GeneralHierName, S: AsRef<str>
+where
+    C: GeneralHierName,
+    S: AsRef<str>,
 {
     #[inline]
     fn hierarchy(&self) -> &dyn GeneralHierName {
@@ -271,9 +285,7 @@ impl Hash for dyn GeneralPinName + '_ {
     }
 }
 
-impl<'i> std::borrow::Borrow<dyn GeneralPinName + 'i>
-    for (HierName, CompactString, Option<isize>)
-{
+impl<'i> std::borrow::Borrow<dyn GeneralPinName + 'i> for (HierName, CompactString, Option<isize>) {
     #[inline]
     fn borrow(&self) -> &(dyn GeneralPinName + 'i) {
         self
@@ -292,9 +304,9 @@ impl<'i, 'j> std::borrow::Borrow<dyn GeneralPinName + 'i>
 impl PartialEq for dyn GeneralPinName + '_ {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.bus_id() == other.bus_id() &&
-            self.pin_type() == other.pin_type() &&
-            self.hierarchy() == other.hierarchy()
+        self.bus_id() == other.bus_id()
+            && self.pin_type() == other.pin_type()
+            && self.hierarchy() == other.hierarchy()
     }
 }
 
@@ -302,9 +314,7 @@ impl Eq for dyn GeneralPinName + '_ {}
 
 /// this struct is used to zero-copy refer to a general
 /// pin tuple, for map lookup.
-pub struct RefPinName<'a, 'b, T: GeneralHierName>(
-    pub &'a T, pub &'b str, pub Option<isize>
-);
+pub struct RefPinName<'a, 'b, T: GeneralHierName>(pub &'a T, pub &'b str, pub Option<isize>);
 
 impl<'a, 'b, T: GeneralHierName + Hash> Hash for RefPinName<'a, 'b, T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -319,7 +329,6 @@ impl<'a, 'b, T: GeneralHierName> GeneralPinName for RefPinName<'a, 'b, T> {
     fn hierarchy(&self) -> &dyn GeneralHierName {
         &*self.0
     }
-
 
     #[inline]
     fn pin_type(&self) -> &str {
@@ -340,12 +349,14 @@ pub trait GeneralMacroPinName {
 
     /// Format any pin name to `a/b/c:d[0]`-like `String`, for debugging.
     fn dbg_fmt_macro_pin(&self) -> String {
-        format!("{}{}",
-                self.pin_type(),
-                match self.bus_id() {
-                    None => "".to_string(),
-                    Some(id) => format!("[{}]", id)
-                })
+        format!(
+            "{}{}",
+            self.pin_type(),
+            match self.bus_id() {
+                None => "".to_string(),
+                Some(id) => format!("[{}]", id),
+            }
+        )
     }
 }
 
@@ -369,9 +380,7 @@ impl Hash for dyn GeneralMacroPinName + '_ {
     }
 }
 
-impl<'i> std::borrow::Borrow<dyn GeneralMacroPinName + 'i>
-    for (CompactString, Option<isize>)
-{
+impl<'i> std::borrow::Borrow<dyn GeneralMacroPinName + 'i> for (CompactString, Option<isize>) {
     #[inline]
     fn borrow(&self) -> &(dyn GeneralMacroPinName + 'i) {
         self
@@ -390,8 +399,7 @@ impl<'i, 'j> std::borrow::Borrow<dyn GeneralMacroPinName + 'i>
 impl PartialEq for dyn GeneralMacroPinName + '_ {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.bus_id() == other.bus_id() &&
-            self.pin_type() == other.pin_type()
+        self.bus_id() == other.bus_id() && self.pin_type() == other.pin_type()
     }
 }
 
@@ -399,9 +407,7 @@ impl Eq for dyn GeneralMacroPinName + '_ {}
 
 /// this struct is used to zero-copy refer to a general
 /// macro pin name tuple, for map lookup.
-pub struct RefMacroPinName<'a>(
-    pub &'a str, pub Option<isize>
-);
+pub struct RefMacroPinName<'a>(pub &'a str, pub Option<isize>);
 
 impl<'a> Hash for RefMacroPinName<'a> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -424,25 +430,28 @@ impl<'a> GeneralMacroPinName for RefMacroPinName<'a> {
 
 #[test]
 fn test_general_hier_hash() {
-    let h1 = Arc::from(HierName{
+    let h1 = Arc::from(HierName {
         cur: CompactString::new_inline("top"),
-        prev: None
+        prev: None,
     });
-    let h2 = Arc::from(HierName{
+    let h2 = Arc::from(HierName {
         cur: CompactString::new_inline("mod1"),
-        prev: Some(h1.clone())
+        prev: Some(h1.clone()),
     });
-    let h3 = Arc::from(HierName{
+    let h3 = Arc::from(HierName {
         cur: CompactString::new_inline("leaf1"),
-        prev: Some(h2.clone())
+        prev: Some(h2.clone()),
     });
     fn hash(x: impl Hash) -> u64 {
-        use std::hash::Hasher;
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::Hasher;
         let mut hasher = DefaultHasher::new();
         x.hash(&mut hasher);
         hasher.finish()
     }
     assert_eq!(hash(h3.clone()), hash(("leaf1", "mod1", "top")));
-    assert_eq!(hash(h3.clone()), hash(&["leaf1", "mod1", "top"] as &dyn GeneralHierName));
+    assert_eq!(
+        hash(h3.clone()),
+        hash(&["leaf1", "mod1", "top"] as &dyn GeneralHierName)
+    );
 }

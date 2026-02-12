@@ -25,10 +25,10 @@ mod bindgen;
 pub use bindgen::bindgen;
 
 mod headers;
-pub use headers::{ export_csrc, import_csrc };
+pub use headers::{export_csrc, import_csrc};
 
 mod compile;
-pub use compile::{ cl_cpp_openmp, cl_cuda, cl_cuda_arch, cl_metal, MetalBuild };
+pub use compile::{cl_cpp_openmp, cl_cuda, cl_cuda_arch, cl_metal, MetalBuild};
 
 mod lsp;
 pub use lsp::make_compile_commands;

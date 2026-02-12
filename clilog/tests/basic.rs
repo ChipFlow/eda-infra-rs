@@ -1,4 +1,3 @@
-
 #[test]
 fn test_main() {
     clilog::init_stderr_color_debug();

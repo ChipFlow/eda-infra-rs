@@ -1,10 +1,11 @@
 use super::InvalidData;
+use compact_str::CompactString;
 use std::io;
 use std::str::{from_utf8, FromStr};
-use compact_str::CompactString;
 
 use crate::{
-    Command, Header, ReferenceIndex, Scope, ScopeItem, ScopeType, SimulationCommand, Value, VecValue, Var,
+    Command, Header, ReferenceIndex, Scope, ScopeItem, ScopeType, SimulationCommand, Value, Var,
+    VecValue,
 };
 
 fn whitespace_byte(b: u8) -> bool {
@@ -119,7 +120,8 @@ impl<R: io::Read> Parser<R> {
         let len = r.len() - 4;
         r.truncate(len);
 
-        let s = CompactString::from_utf8(&r).map_err(|_| io::Error::from(InvalidData("string is not UTF-8")))?;
+        let s = CompactString::from_utf8(&r)
+            .map_err(|_| io::Error::from(InvalidData("string is not UTF-8")))?;
         Ok(s.trim().into()) // TODO: don't reallocate
     }
 
@@ -673,7 +675,8 @@ b1 n0
                 vec![
                     V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0,
                     V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0,
-                ].into(),
+                ]
+                .into(),
             ),
             ChangeVector(7347u32.into(), vec![V1].into()),
             ChangeVector(7348u32.into(), vec![V0, V0, V0, V0, V0, V0, V0, V0].into()),
@@ -686,7 +689,10 @@ b1 n0
             ChangeVector(7355u32.into(), vec![V0].into()),
             ChangeVector(7356u32.into(), vec![V0, V0, V0, V0, V0].into()),
             ChangeVector(690821u32.into(), vec![V0, V0, V0, V0, V0].into()),
-            ChangeVector(690822u32.into(), vec![V0, V0, V0, V0, V0, V0, V0, V0].into()),
+            ChangeVector(
+                690822u32.into(),
+                vec![V0, V0, V0, V0, V0, V0, V0, V0].into(),
+            ),
             Timestamp(5),
             ChangeVector(7347u32.into(), vec![V0].into()),
             Timestamp(10),
@@ -696,7 +702,8 @@ b1 n0
                 vec![
                     V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0,
                     V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V1,
-                ].into(),
+                ]
+                .into(),
             ),
             ChangeVector(7347u32.into(), vec![V1].into()),
             ChangeVector(7348u32.into(), vec![V0, V0, V0, V0, V0, V0, V0, V0].into()),
@@ -709,7 +716,10 @@ b1 n0
             ChangeVector(7355u32.into(), vec![V0].into()),
             ChangeVector(7356u32.into(), vec![V0, V0, V0, V0, V0].into()),
             ChangeVector(690821u32.into(), vec![V0, V0, V0, V0, V0].into()),
-            ChangeVector(690822u32.into(), vec![V0, V0, V0, V0, V0, V0, V0, V0].into()),
+            ChangeVector(
+                690822u32.into(),
+                vec![V0, V0, V0, V0, V0, V0, V0, V0].into(),
+            ),
             Timestamp(15),
             ChangeVector(7347u32.into(), vec![V0].into()),
             Timestamp(20),
@@ -719,7 +729,8 @@ b1 n0
                 vec![
                     V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V0,
                     V0, V0, V0, V0, V0, V0, V0, V0, V0, V0, V1, V0,
-                ].into(),
+                ]
+                .into(),
             ),
             ChangeVector(7347u32.into(), vec![V1].into()),
         ];
@@ -728,7 +739,6 @@ b1 n0
             assert_eq!(&i.unwrap(), e);
         }
     }
-
 
     #[test]
     fn comment_in_scope() {
@@ -811,7 +821,6 @@ b1 n0
         } else {
             panic!("Expected Comment, found {:?}", scope.children[8]);
         }
-
 
         let expected = &[
             Begin(Dumpvars),

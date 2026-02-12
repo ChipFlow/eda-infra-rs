@@ -34,20 +34,18 @@ impl VecCSR {
         }
         VecCSR {
             start: start.into(),
-            items: items.into()
+            items: items.into(),
         }
     }
 
     /// convenient method to get an iterator of set items.
     #[inline]
-    pub fn iter_set(&self, set_id: usize)
-                    -> impl Iterator<Item = usize> + '_
-    {
+    pub fn iter_set(&self, set_id: usize) -> impl Iterator<Item = usize> + '_ {
         let l = self.start[set_id];
         let r = self.start[set_id + 1];
         self.items[l..r].iter().copied()
     }
-    
+
     /// get size of a set
     #[inline]
     pub fn len(&self, set_id: usize) -> usize {

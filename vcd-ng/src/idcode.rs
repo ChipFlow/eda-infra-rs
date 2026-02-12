@@ -1,6 +1,6 @@
+use compact_str::CompactString;
 use std::fmt::{self, Display};
 use std::str::FromStr;
-use compact_str::CompactString;
 
 use crate::InvalidData;
 

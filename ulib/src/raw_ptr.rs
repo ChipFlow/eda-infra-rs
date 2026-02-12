@@ -12,14 +12,14 @@ use super::*;
 #[derive(Debug, Copy, Clone)]
 pub struct RawUPtr<T: UniversalCopy> {
     ptr: *const T,
-    device: Device
+    device: Device,
 }
 
 /// A raw mutable pointer wrapper associated with a device.
 #[derive(Debug)]
 pub struct RawUPtrMut<T: UniversalCopy> {
     ptr: *mut T,
-    device: Device
+    device: Device,
 }
 
 impl<T: UniversalCopy> RawUPtr<T> {
@@ -63,7 +63,7 @@ impl<T: UniversalCopy> AsUPtrMut<T> for RawUPtrMut<T> {
 /// An explicit null universal pointer.
 ///
 /// To create one, use [`NullUPtr::new`].
-/// 
+///
 /// You should only use it in functions that explicitly accepts
 /// null pointers (e.g., to represent optional inputs).
 #[non_exhaustive]

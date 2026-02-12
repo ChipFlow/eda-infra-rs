@@ -2,9 +2,9 @@
 
 use cc::Build;
 use std::env;
-use std::path::{ Path, PathBuf };
-use std::process::Command;
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// private util to add version definitions to the compiler.
 fn add_definitions(builder: &mut Build) {
@@ -48,8 +48,7 @@ pub fn cl_cpp_openmp() -> Build {
         }
         // on macos, the library is omp.
         println!("cargo:rustc-link-lib=dylib=omp");
-    }
-    else {
+    } else {
         // on linux, the library is gomp.
         // static linking is also available but not very straightforward,
         // as the libgomp.a is hidden somewhere. also not preferred.
@@ -60,11 +59,15 @@ pub fn cl_cpp_openmp() -> Build {
         .flag("-Wall")
         .flag("-fopenmp")
         .flag("-std=c++14")
-        .out_dir(env::var_os("OUT_DIR").map(|v| {
-            let mut v = PathBuf::from(v);
-            v.push("ucc_cpp");
-            v
-        }).unwrap());
+        .out_dir(
+            env::var_os("OUT_DIR")
+                .map(|v| {
+                    let mut v = PathBuf::from(v);
+                    v.push("ucc_cpp");
+                    v
+                })
+                .unwrap(),
+        );
     add_definitions(&mut builder);
     builder
 }
@@ -82,21 +85,27 @@ pub fn cl_cuda_arch(gencode: Option<&[u32]>, ptx_arch: Option<u32>) -> Build {
     let mut builder_cuda = Build::new();
     builder_cuda
         .cuda(true)
-        .flag("-Xcompiler").flag("-Wall")
+        .flag("-Xcompiler")
+        .flag("-Wall")
         .flag("-std=c++14");
     for arch in gencode.unwrap_or(&[]) {
-        builder_cuda.flag("-gencode")
+        builder_cuda
+            .flag("-gencode")
             .flag(&format!("arch=compute_{arch},code=sm_{arch}"));
     }
     if let Some(ptx_arch) = ptx_arch {
         builder_cuda.flag(&format!("-arch=compute_{ptx_arch}"));
         builder_cuda.flag(&format!("-code=sm_{ptx_arch},compute_{ptx_arch}"));
     }
-    builder_cuda.out_dir(env::var_os("OUT_DIR").map(|v| {
-        let mut v = PathBuf::from(v);
-        v.push("ucc_cuda");
-        v
-    }).unwrap());
+    builder_cuda.out_dir(
+        env::var_os("OUT_DIR")
+            .map(|v| {
+                let mut v = PathBuf::from(v);
+                v.push("ucc_cuda");
+                v
+            })
+            .unwrap(),
+    );
     add_definitions(&mut builder_cuda);
     builder_cuda
 }
@@ -117,14 +126,24 @@ pub fn cl_cuda() -> Build {
     println!("cargo:rerun-if-env-changed=UCC_CUDA_PTX");
     println!("cargo:rerun-if-env-changed=UCC_CUDA_GENCODE");
     let ptx_arch = match env::var("UCC_CUDA_PTX") {
-        Ok(v) => if v.is_empty() { None } else { Some(v.parse().unwrap()) },
-        Err(_) => Some(50)
+        Ok(v) => {
+            if v.is_empty() {
+                None
+            } else {
+                Some(v.parse().unwrap())
+            }
+        }
+        Err(_) => Some(50),
     };
     let gencode = match env::var("UCC_CUDA_GENCODE") {
-        Ok(v) => if v.is_empty() { None } else { Some(
-            v.split(',').map(|i| i.parse().unwrap()).collect::<Vec<_>>()
-        ) },
-        Err(_) => Some(vec![80, 70])
+        Ok(v) => {
+            if v.is_empty() {
+                None
+            } else {
+                Some(v.split(',').map(|i| i.parse().unwrap()).collect::<Vec<_>>())
+            }
+        }
+        Err(_) => Some(vec![80, 70]),
     };
     cl_cuda_arch(gencode.as_deref(), ptx_arch)
 }
@@ -145,11 +164,13 @@ pub struct MetalBuild {
 impl MetalBuild {
     /// Create a new Metal build configuration.
     pub fn new() -> Self {
-        let out_dir = env::var_os("OUT_DIR").map(|v| {
-            let mut v = PathBuf::from(v);
-            v.push("ucc_metal");
-            v
-        }).unwrap_or_else(|| PathBuf::from("target/ucc_metal"));
+        let out_dir = env::var_os("OUT_DIR")
+            .map(|v| {
+                let mut v = PathBuf::from(v);
+                v.push("ucc_metal");
+                v
+            })
+            .unwrap_or_else(|| PathBuf::from("target/ucc_metal"));
 
         Self {
             files: Vec::new(),
@@ -177,7 +198,8 @@ impl MetalBuild {
 
     /// Add a preprocessor definition.
     pub fn define(&mut self, name: &str, value: Option<&str>) -> &mut Self {
-        self.defines.push((name.to_string(), value.map(|s| s.to_string())));
+        self.defines
+            .push((name.to_string(), value.map(|s| s.to_string())));
         self
     }
 
@@ -210,7 +232,8 @@ impl MetalBuild {
 
         // Compile each .metal file to .air (Apple Intermediate Representation)
         for metal_file in &self.files {
-            let file_stem = metal_file.file_stem()
+            let file_stem = metal_file
+                .file_stem()
                 .expect("metal file has no stem")
                 .to_str()
                 .expect("invalid file stem");
@@ -218,7 +241,8 @@ impl MetalBuild {
             let air_file = self.out_dir.join(format!("{}.air", file_stem));
 
             let mut cmd = Command::new("xcrun");
-            cmd.arg("-sdk").arg("macosx")
+            cmd.arg("-sdk")
+                .arg("macosx")
                 .arg("metal")
                 .arg("-c")
                 .arg(format!("-std={}", self.std_version))
@@ -237,11 +261,9 @@ impl MetalBuild {
                 };
             }
 
-            cmd.arg("-o").arg(&air_file)
-                .arg(metal_file);
+            cmd.arg("-o").arg(&air_file).arg(metal_file);
 
-            let status = cmd.status()
-                .expect("failed to run metal compiler");
+            let status = cmd.status().expect("failed to run metal compiler");
 
             if !status.success() {
                 panic!("metal compiler failed for {}", metal_file.display());
@@ -254,16 +276,17 @@ impl MetalBuild {
         let metallib_file = self.out_dir.join(format!("{}.metallib", lib_name));
 
         let mut cmd = Command::new("xcrun");
-        cmd.arg("-sdk").arg("macosx")
+        cmd.arg("-sdk")
+            .arg("macosx")
             .arg("metallib")
-            .arg("-o").arg(&metallib_file);
+            .arg("-o")
+            .arg(&metallib_file);
 
         for air_file in &air_files {
             cmd.arg(air_file);
         }
 
-        let status = cmd.status()
-            .expect("failed to run metallib linker");
+        let status = cmd.status().expect("failed to run metallib linker");
 
         if !status.success() {
             panic!("metallib linking failed");

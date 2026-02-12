@@ -4,11 +4,11 @@
 //! It is adapted from [the source code of `cust_derive`](https://docs.rs/cust_derive/latest/src/cust_derive/lib.rs.html#20-24).
 
 use proc_macro2::{Ident, Span, TokenStream};
+use quote::quote;
 use syn::{
     parse_str, Data, DataEnum, DataStruct, DataUnion, DeriveInput, Field, Fields, Generics,
     TypeParamBound,
 };
-use quote::quote;
 
 #[proc_macro_derive(UniversalCopy)]
 pub fn universal_copy(input: BaseTokenStream) -> BaseTokenStream {
@@ -36,13 +36,19 @@ fn impl_universal_copy(input: &DeriveInput) -> TokenStream {
 
     // If the struct/enum/union is generic, we need to add the DeviceCopy bound to the generics
     // when implementing DeviceCopy.
-    let generics = add_bound_to_generics(&input.generics, quote! {
-        ::std::marker::Copy
-    });
+    let generics = add_bound_to_generics(
+        &input.generics,
+        quote! {
+            ::std::marker::Copy
+        },
+    );
     #[cfg(feature = "cuda")]
-    let generics = add_bound_to_generics(&generics, quote! {
-        ::std::marker::Copy
-    });
+    let generics = add_bound_to_generics(
+        &generics,
+        quote! {
+            ::std::marker::Copy
+        },
+    );
     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
 
     // Finally, generate the unsafe impl and the type-checking function.
@@ -52,7 +58,7 @@ fn impl_universal_copy(input: &DeriveInput) -> TokenStream {
     };
     #[cfg(not(feature = "cuda"))]
     let impl_cuda = quote! {};
-    
+
     #[cfg(feature = "cuda")]
     let trait_bounds = quote! {
         ::std::marker::Copy + ::ulib::cust::memory::DeviceCopy
@@ -61,7 +67,7 @@ fn impl_universal_copy(input: &DeriveInput) -> TokenStream {
     let trait_bounds = quote! {
         ::std::marker::Copy
     };
-    
+
     let generated_code = quote! {
         impl #impl_generics ::std::marker::Copy for #input_type #type_generics #where_clause {}
         #impl_cuda

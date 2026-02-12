@@ -1,5 +1,5 @@
 #[allow(unused_imports)]
-use ulib::{ UVec, Device, AsUPtr, AsUPtrMut };
+use ulib::{AsUPtr, AsUPtrMut, Device, UVec};
 
 #[test]
 fn test_simple_cpu() {
@@ -15,7 +15,9 @@ fn test_realloc_cpu() {
     let mut uvt: UVec<i32> = UVec::new_zeroed(2, Device::CPU);
     uvt.as_mut()[0] = 10;
 
-    unsafe { uvt.resize_uninit_preserve(3, Device::CPU); }
+    unsafe {
+        uvt.resize_uninit_preserve(3, Device::CPU);
+    }
     assert!(uvt.len() == 3);
     assert!(uvt.capacity() >= 3);
 
@@ -53,7 +55,9 @@ fn test_realloc_cuda() {
     let mut uvt: UVec<i32> = UVec::new_zeroed(2, Device::CPU);
     uvt.as_mut()[0] = 10;
 
-    unsafe { uvt.resize_uninit_preserve(3, Device::CUDA(0)); }
+    unsafe {
+        uvt.resize_uninit_preserve(3, Device::CUDA(0));
+    }
     assert!(uvt.len() == 3);
     assert!(uvt.capacity() >= 3);
 
@@ -61,15 +65,20 @@ fn test_realloc_cuda() {
     assert!(uvt.len() == 3);
     assert!(uvt.capacity() >= 13);
 
-    assert_eq!(uvt.as_ref()[0], 10);  // back to cpu.
+    assert_eq!(uvt.as_ref()[0], 10); // back to cpu.
     assert_eq!(uvt.as_ref()[1], 0);
 
-    unsafe { uvt.resize_uninit_nopreserve(20, Device::CUDA(0)); }
+    unsafe {
+        uvt.resize_uninit_nopreserve(20, Device::CUDA(0));
+    }
     assert!(uvt.len() == 20);
     assert!(uvt.capacity() >= 20);
 
     uvt.fill(66, Device::CUDA(0));
-    assert_eq!(uvt.as_ref(), &[66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66]);
+    assert_eq!(
+        uvt.as_ref(),
+        &[66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66]
+    );
 }
 
 #[test]
@@ -86,7 +95,8 @@ fn test_vec_into() {
 fn test_ptr_copy() {
     let devices_to_test = [
         Device::CPU,
-        #[cfg(feature = "cuda")] Device::CUDA(0)
+        #[cfg(feature = "cuda")]
+        Device::CUDA(0),
     ];
     for device1 in devices_to_test {
         for device2 in devices_to_test {

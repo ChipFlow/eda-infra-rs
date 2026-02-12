@@ -2,7 +2,7 @@ use std::io;
 
 use crate::{
     Command, Header, IdCode, ReferenceIndex, Scope, ScopeItem, ScopeType, SimulationCommand,
-    TimescaleUnit, Value, VecValue, Var, VarType,
+    TimescaleUnit, Value, Var, VarType, VecValue,
 };
 
 /// Struct wrapping an `io::Write` with methods for writing VCD commands and data.

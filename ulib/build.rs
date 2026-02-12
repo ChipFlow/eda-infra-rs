@@ -20,14 +20,19 @@ fn main() {
         cl_cuda
     };
 
-    ucc::bindgen([
-        "csrc/memfill.cpp",
-        #[cfg(feature = "cuda")] "csrc/memfill.cu"
-    ], "memfill.rs");
+    ucc::bindgen(
+        [
+            "csrc/memfill.cpp",
+            #[cfg(feature = "cuda")]
+            "csrc/memfill.cu",
+        ],
+        "memfill.rs",
+    );
 
     ucc::export_csrc();
     ucc::make_compile_commands(&[
         &cl_cpp,
-        #[cfg(feature = "cuda")] &cl_cuda
+        #[cfg(feature = "cuda")]
+        &cl_cuda,
     ]);
 }

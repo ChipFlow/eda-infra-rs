@@ -1,18 +1,18 @@
 //! Writes out compile commands for CXX language servers.
 
 use cc::Build;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
-use std::fs::{ self, File };
+use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::PathBuf;
-use serde::{ Serialize, Deserialize };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
 struct CommandRecord {
     directory: String,
     command: String,
-    file: String
+    file: String,
 }
 
 /// create `compile_commands.json` for language servers like `clangd`.
@@ -43,24 +43,28 @@ struct CommandRecord {
 pub fn make_compile_commands(builds: &[&Build]) {
     let project_root = env::var("CARGO_MANIFEST_DIR").unwrap();
     let out_dir = env::var("OUT_DIR").unwrap();
-    let mut records = builds.into_iter().map(|build| {
-        let ref_project_root = &project_root;
-        let compiler = build.get_compiler();
-        build.get_files().map(move |file| {
-            let mut command = compiler.to_command();
-            command.arg(file);
-            CommandRecord {
-                directory: ref_project_root.clone(),
-                command: format!("{:?}", command),
-                file: file.to_str().unwrap().to_string()
-            }
+    let mut records = builds
+        .into_iter()
+        .map(|build| {
+            let ref_project_root = &project_root;
+            let compiler = build.get_compiler();
+            build.get_files().map(move |file| {
+                let mut command = compiler.to_command();
+                command.arg(file);
+                CommandRecord {
+                    directory: ref_project_root.clone(),
+                    command: format!("{:?}", command),
+                    file: file.to_str().unwrap().to_string(),
+                }
+            })
         })
-    }).flatten().collect::<HashSet<_>>();
+        .flatten()
+        .collect::<HashSet<_>>();
 
     // import dependency commands
     for (k, v) in env::vars() {
         if !(k.starts_with("DEP_") && k.ends_with("_UCC_CSRC_COMPILE_COMMANDS")) {
-            continue
+            continue;
         }
         println!("[ucc lsp] include dep commands {}", v);
         let file = File::open(v).unwrap();
@@ -69,14 +73,12 @@ pub fn make_compile_commands(builds: &[&Build]) {
         records.extend(c.into_iter());
     }
 
-    let json = format!(
-        "{}", serde_json::to_string_pretty(&records).unwrap());
+    let json = format!("{}", serde_json::to_string_pretty(&records).unwrap());
 
     let save_to = PathBuf::from(out_dir).join("compile_commands.json");
     fs::write(&save_to, &json).unwrap();
 
-    println!("cargo:ucc_csrc_compile_commands={}",
-             save_to.display());
+    println!("cargo:ucc_csrc_compile_commands={}", save_to.display());
 
     if PathBuf::from(&project_root).join(".git").exists() {
         let save_to = PathBuf::from(&project_root).join("compile_commands.json");
@@ -89,8 +91,7 @@ pub fn make_compile_commands(builds: &[&Build]) {
                 println!("cargo:warning=.gitignore does not contain compile_commands.json");
                 println!("cargo:rerun-if-changed=.gitignore");
             }
-        }
-        else {
+        } else {
             println!("cargo:warning=.gitignore file not found");
             println!("cargo:rerun-if-changed=.gitignore");
         }

@@ -13,8 +13,8 @@
 //! are suppressed.
 //! (TODO: not implemented yet.)
 
-use std::sync::Mutex;
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::sync::Once;
 
 pub use log;
@@ -55,7 +55,8 @@ pub fn init_stderr_color_debug() {
                 .build(),
             TerminalMode::Stderr,
             ColorChoice::Auto,
-        ).unwrap();
+        )
+        .unwrap();
     });
 }
 
@@ -76,8 +77,9 @@ pub fn init_stdout_simple_trace() {
                 .set_location_level(LevelFilter::Debug)
                 .set_thread_level(LevelFilter::Trace)
                 .add_filter_ignore_str("rustyline")
-                .build()
-        ).unwrap();
+                .build(),
+        )
+        .unwrap();
     });
 }
 
@@ -85,7 +87,9 @@ pub fn init_stdout_simple_trace() {
 /// This is only effective if the type of message is not printed
 /// before.
 pub fn set_default_max_print_count(c: u64) {
-    unsafe { DEFAULT_MAX_PRINT_COUNT = c; }
+    unsafe {
+        DEFAULT_MAX_PRINT_COUNT = c;
+    }
 }
 
 /// Set max print count of a specific kind of message.
@@ -94,7 +98,7 @@ pub fn set_max_print_count(typ: Level, id: &'static str, c: u64) {
     match print_counts.get_mut(&(typ, id)) {
         Some((_v, limit)) => {
             *limit = c;
-        },
+        }
         None => {
             print_counts.insert((typ, id), (0, c));
         }
@@ -112,7 +116,7 @@ pub fn obtain_count_and_limit(typ: Level, id: &'static str) -> (u64, u64) {
         Some((v, limit)) => {
             *v += 1;
             (*v, *limit)
-        },
+        }
         None => {
             let default_count = unsafe { DEFAULT_MAX_PRINT_COUNT };
             print_counts.insert((typ, id), (1, default_count));
@@ -130,7 +134,9 @@ pub fn enable_timer(prefix: impl Into<String>) {
 /// check if the timer is enabled for some module path.
 pub fn is_timer_enabled(cur: &str) -> bool {
     for prefix in ENABLED_TIMER_PATHS.lock().unwrap().iter() {
-        if cur.starts_with(prefix) { return true }
+        if cur.starts_with(prefix) {
+            return true;
+        }
     }
     false
 }

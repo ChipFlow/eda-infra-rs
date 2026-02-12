@@ -2,7 +2,7 @@
 //! Copyright (C) 2019, PhilipDaniels, MIT License
 //!
 //! It is modified by introducing crate-based filters.
-//! 
+//!
 //! This crate provides a couple of simple timers that log messages indicating the elapsed
 //! time between their creation and dropping. Messages are output via the
 //! [log](https://crates.io/crates/log) crate.
@@ -156,10 +156,10 @@
 //! struct and `[dnscan/src/main.rs/63]` is the filename and number from `Record` - this captures the place where the timer was
 //! instantiated. The module is also set, but is not shown in these examples.
 
+use super::is_timer_enabled;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
-use super::is_timer_enabled;
 
 // Proc-macros have to be defined in their own lib crate (for now).
 // Re-export them so that users only have to care about this one.
@@ -183,7 +183,7 @@ use super::is_timer_enabled;
  * returns false does not increase the size of the value at all. Rust is cool :-)
  */
 
- /// When this struct is dropped, it logs a message stating its name and how long
+/// When this struct is dropped, it logs a message stating its name and how long
 /// the execution time was. Can be used to time functions or other critical areas.
 pub struct LoggingTimer<'name> {
     /// The log level. Defaults to Debug.
@@ -227,7 +227,7 @@ impl<'name> LoggingTimer<'name> {
                 line,
                 name,
                 finished: AtomicBool::new(false),
-                extra_info
+                extra_info,
             })
         } else {
             None
@@ -264,7 +264,10 @@ impl<'name> LoggingTimer<'name> {
     /// ```text
     /// let tmr = timer!("foo").level(Level::Trace);
     /// ```
-    #[deprecated(since = "0.3", note = "Please use the first parameter to the `timer` or `stimer` macro instead")]
+    #[deprecated(
+        since = "0.3",
+        note = "Please use the first parameter to the `timer` or `stimer` macro instead"
+    )]
     pub fn level(mut self, level: ::log::Level) -> Self {
         self.level = level;
         self
@@ -304,18 +307,32 @@ impl<'name> LoggingTimer<'name> {
             (TimerTarget::Starting, None, Some(args)) => {
                 self.log_record(target, format_args!("{}, {}", self.name, args))
             }
-            (TimerTarget::Starting, None, None) => self.log_record(target, format_args!("{}", self.name)),
+            (TimerTarget::Starting, None, None) => {
+                self.log_record(target, format_args!("{}", self.name))
+            }
 
-            (_, Some(info), Some(args)) => {
-                self.log_record(target, format_args!("{}, Elapsed={:?}, {}, {}", self.name, self.elapsed(), info, args))
-            }
-            (_, Some(info), None) => {
-                self.log_record(target, format_args!("{}, Elapsed={:?}, {}", self.name, self.elapsed(), info))
-            }
-            (_, None, Some(args)) => {
-                self.log_record(target, format_args!("{}, Elapsed={:?}, {}", self.name, self.elapsed(), args))
-            }
-            (_, None, None) => self.log_record(target, format_args!("{}, Elapsed={:?}", self.name, self.elapsed())),
+            (_, Some(info), Some(args)) => self.log_record(
+                target,
+                format_args!(
+                    "{}, Elapsed={:?}, {}, {}",
+                    self.name,
+                    self.elapsed(),
+                    info,
+                    args
+                ),
+            ),
+            (_, Some(info), None) => self.log_record(
+                target,
+                format_args!("{}, Elapsed={:?}, {}", self.name, self.elapsed(), info),
+            ),
+            (_, None, Some(args)) => self.log_record(
+                target,
+                format_args!("{}, Elapsed={:?}, {}", self.name, self.elapsed(), args),
+            ),
+            (_, None, None) => self.log_record(
+                target,
+                format_args!("{}, Elapsed={:?}", self.name, self.elapsed()),
+            ),
         };
     }
 
