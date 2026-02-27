@@ -405,6 +405,11 @@ pub fn cl_hip() -> Build {
         builder
             .cpp(true)
             .compiler(&wrapper_path)
+            // Disable cc-crate auto-warnings: hipcc forwards -Wall/-Wextra
+            // directly to nvcc which rejects them. We add -Wall ourselves
+            // via -Xcompiler below.
+            .warnings(false)
+            .extra_warnings(false)
             .flag("-Xcompiler")
             .flag("-Wall")
             .flag("-std=c++14");
