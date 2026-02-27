@@ -366,12 +366,45 @@ pub fn cl_hip() -> Build {
 
     let mut builder = Build::new();
     if is_nvidia {
-        // When HIP targets NVIDIA, hipcc wraps nvcc. Use .cuda(true) so the
-        // cc crate wraps host-compiler flags (like -ffunction-sections) with
-        // -Xcompiler, which nvcc requires.
+        // When HIP targets NVIDIA, hipcc wraps nvcc. The cc crate auto-adds
+        // flags like -ffunction-sections / -fdata-sections for clang-family
+        // compilers, but hipcc passes them to nvcc which rejects them.
+        // Work around this by generating a wrapper script that strips the
+        // offending flags before forwarding to hipcc.
+        let wrapper_dir = env::var_os("OUT_DIR")
+            .map(|v| {
+                let mut v = PathBuf::from(v);
+                v.push("ucc_hip");
+                v
+            })
+            .unwrap();
+        fs::create_dir_all(&wrapper_dir).expect("failed to create ucc_hip dir");
+        let wrapper_path = wrapper_dir.join("hipcc_nvidia_wrapper.sh");
+        fs::write(
+            &wrapper_path,
+            "#!/bin/sh\n\
+             # Wrapper that strips flags nvcc doesn't understand.\n\
+             # The cc crate adds -ffunction-sections/-fdata-sections for\n\
+             # clang-family compilers; nvcc rejects them.\n\
+             filtered=''\n\
+             for arg in \"$@\"; do\n\
+             \tcase \"$arg\" in\n\
+             \t\t-ffunction-sections|-fdata-sections) ;;\n\
+             \t\t*) filtered=\"$filtered \\\"$arg\\\"\" ;;\n\
+             \tesac\n\
+             done\n\
+             eval exec hipcc $filtered\n",
+        )
+        .expect("failed to write hipcc wrapper");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&wrapper_path, fs::Permissions::from_mode(0o755))
+                .expect("failed to chmod hipcc wrapper");
+        }
         builder
-            .cuda(true)
-            .compiler("hipcc")
+            .cpp(true)
+            .compiler(&wrapper_path)
             .flag("-Xcompiler")
             .flag("-Wall")
             .flag("-std=c++14");

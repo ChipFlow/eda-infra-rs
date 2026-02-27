@@ -512,6 +512,21 @@ pub unsafe fn copy<T: UniversalCopy>(
         // HIP device copies
         #[cfg(feature = "hip")]
         (HIP(h), CPU) => {
+            // dest=device, src=host → HostToDevice
+            let _ctx = HIP(h).get_context();
+            let err = unsafe {
+                hip_ffi::hipMemcpy(
+                    ptr_dest as *mut std::os::raw::c_void,
+                    ptr_src as *const std::os::raw::c_void,
+                    count * size_of::<T>(),
+                    hip_ffi::hipMemcpyHostToDevice,
+                )
+            };
+            hip_ffi::check_hip(err, "hipMemcpy H2D");
+        }
+        #[cfg(feature = "hip")]
+        (CPU, HIP(h)) => {
+            // dest=host, src=device → DeviceToHost
             let _ctx = HIP(h).get_context();
             let err = unsafe {
                 hip_ffi::hipMemcpy(
@@ -524,19 +539,6 @@ pub unsafe fn copy<T: UniversalCopy>(
             hip_ffi::check_hip(err, "hipMemcpy D2H");
             let err = unsafe { hip_ffi::hipDeviceSynchronize() };
             hip_ffi::check_hip(err, "hipDeviceSynchronize after D2H");
-        }
-        #[cfg(feature = "hip")]
-        (CPU, HIP(h)) => {
-            let _ctx = HIP(h).get_context();
-            let err = unsafe {
-                hip_ffi::hipMemcpy(
-                    ptr_dest as *mut std::os::raw::c_void,
-                    ptr_src as *const std::os::raw::c_void,
-                    count * size_of::<T>(),
-                    hip_ffi::hipMemcpyHostToDevice,
-                )
-            };
-            hip_ffi::check_hip(err, "hipMemcpy H2D");
         }
         #[cfg(feature = "hip")]
         (HIP(h1), HIP(_h2)) => {
