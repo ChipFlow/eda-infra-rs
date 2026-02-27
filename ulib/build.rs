@@ -31,6 +31,11 @@ fn main() {
         // into ulibhip handle both cases — link the appropriate runtime.
         if std::env::var("HIP_PLATFORM").as_deref() == Ok("nvidia") {
             println!("cargo:rustc-link-lib=dylib=cudart");
+            // CUDA toolkit may be in a non-standard path.
+            let cuda_path = std::env::var("CUDA_PATH")
+                .unwrap_or_else(|_| "/usr/local/cuda".to_string());
+            println!("cargo:rustc-link-search=native={}/lib64", cuda_path);
+            println!("cargo:rustc-link-search=native={}/lib", cuda_path);
         } else {
             println!("cargo:rustc-link-lib=dylib=amdhip64");
             let rocm_path = std::env::var("ROCM_PATH")
@@ -38,6 +43,7 @@ fn main() {
             println!("cargo:rustc-link-search=native={}/lib", rocm_path);
         }
         println!("cargo:rerun-if-env-changed=HIP_PLATFORM");
+        println!("cargo:rerun-if-env-changed=CUDA_PATH");
         cl_hip
     };
 
