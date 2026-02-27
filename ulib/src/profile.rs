@@ -49,6 +49,10 @@ pub fn device_mem_used(device: Device) -> usize {
         Device::CPU => cpu_physical_mem(),
         #[cfg(feature = "cuda")]
         Device::CUDA(cuid) => cuda_used_total_mem(cuid).0,
+        // HIP does not expose a simple memory query in our minimal FFI;
+        // return CPU physical memory as an approximation.
+        #[cfg(feature = "hip")]
+        Device::HIP(_) => cpu_physical_mem(),
         // Metal uses unified memory on Apple Silicon, so GPU memory
         // is part of system memory. Return CPU physical mem as approximation.
         #[cfg(feature = "metal")]
@@ -72,6 +76,11 @@ pub fn log_memory_stats() {
                 Size::from_bytes(cuda_total)
             );
         }
+    }
+    #[cfg(feature = "hip")]
+    {
+        let num_hip = *crate::NUM_HIP_DEVICES;
+        clilog::info!("hip devices detected: {}", num_hip);
     }
     #[cfg(feature = "metal")]
     {

@@ -16,6 +16,57 @@ use cust::memory::{CopyDestination, DeviceBuffer};
 #[cfg(feature = "metal")]
 use metal::MTLResourceOptions;
 
+/// A HIP device buffer wrapping a raw device pointer.
+/// Automatically frees the allocation on drop.
+#[cfg(feature = "hip")]
+struct HipBuffer<T: UniversalCopy> {
+    ptr: *mut T,
+    len: usize,
+}
+
+#[cfg(feature = "hip")]
+impl<T: UniversalCopy> HipBuffer<T> {
+    /// Allocate `len` elements on the HIP device (uninitialized).
+    unsafe fn alloc_uninit(len: usize) -> Self {
+        let byte_size = len * std::mem::size_of::<T>();
+        let mut ptr: *mut std::os::raw::c_void = std::ptr::null_mut();
+        let err = super::hip_ffi::hipMalloc(&mut ptr, byte_size);
+        super::hip_ffi::check_hip(err, "hipMalloc");
+        HipBuffer { ptr: ptr as *mut T, len }
+    }
+
+    /// Allocate `len` elements on the HIP device, zeroed.
+    unsafe fn alloc_zeroed(len: usize) -> Self {
+        let buf = Self::alloc_uninit(len);
+        let byte_size = len * std::mem::size_of::<T>();
+        let err = super::hip_ffi::hipMemset(buf.ptr as *mut std::os::raw::c_void, 0, byte_size);
+        super::hip_ffi::check_hip(err, "hipMemset");
+        buf
+    }
+
+    fn as_ptr(&self) -> *const T { self.ptr as *const T }
+    fn as_mut_ptr(&self) -> *mut T { self.ptr }
+}
+
+#[cfg(feature = "hip")]
+impl<T: UniversalCopy> Drop for HipBuffer<T> {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() {
+            let err = unsafe { super::hip_ffi::hipFree(self.ptr as *mut std::os::raw::c_void) };
+            // Don't panic in drop — just log
+            if err != super::hip_ffi::HIP_SUCCESS {
+                eprintln!("Warning: hipFree failed with code {}", err);
+            }
+        }
+    }
+}
+
+// Safety: HipBuffer holds a device pointer that can be sent across threads.
+#[cfg(feature = "hip")]
+unsafe impl<T: UniversalCopy> Send for HipBuffer<T> {}
+#[cfg(feature = "hip")]
+unsafe impl<T: UniversalCopy> Sync for HipBuffer<T> {}
+
 /// Universal vector-like array storage.
 ///
 /// `UVec` is thread-safe (`Send` + `Sync`). Specifically, its
@@ -51,6 +102,8 @@ struct UVecInternal<T: UniversalCopy> {
     data_cpu: Option<Box<[T]>>,
     #[cfg(feature = "cuda")]
     data_cuda: [Option<DeviceBuffer<T>>; MAX_NUM_CUDA_DEVICES],
+    #[cfg(feature = "hip")]
+    data_hip: [Option<HipBuffer<T>>; MAX_NUM_HIP_DEVICES],
     /// Metal buffer using shared memory (Apple Silicon UMA).
     /// With MTLResourceStorageModeShared, CPU and GPU share the same memory.
     #[cfg(feature = "metal")]
@@ -108,6 +161,8 @@ impl<T: UniversalCopy> Default for UVec<T> {
             data_cpu: None,
             #[cfg(feature = "cuda")]
             data_cuda: Default::default(),
+            #[cfg(feature = "hip")]
+            data_hip: Default::default(),
             #[cfg(feature = "metal")]
             data_metal: Default::default(),
             valid_flag: [false; MAX_DEVICES],
@@ -128,6 +183,8 @@ impl<T: UniversalCopy> From<Box<[T]>> for UVec<T> {
             data_cpu: Some(b),
             #[cfg(feature = "cuda")]
             data_cuda: Default::default(),
+            #[cfg(feature = "hip")]
+            data_hip: Default::default(),
             #[cfg(feature = "metal")]
             data_metal: Default::default(),
             valid_flag,
@@ -248,6 +305,11 @@ impl<T: UniversalCopy + Zeroable> UVecInternal<T> {
                 let _context = Context::new(CUDA_DEVICES[c as usize].0).unwrap();
                 self.data_cuda[c as usize] = Some(DeviceBuffer::zeroed(self.capacity).unwrap());
             }
+            #[cfg(feature = "hip")]
+            HIP(h) => {
+                let _ctx = HIP(h).get_context();
+                self.data_hip[h as usize] = Some(unsafe { HipBuffer::alloc_zeroed(self.capacity) });
+            }
             #[cfg(feature = "metal")]
             Metal(m) => {
                 let device = &METAL_DEVICES[m as usize];
@@ -279,6 +341,13 @@ unsafe fn alloc_cuda_uninit<T: UniversalCopy>(sz: usize, dev: u8) -> DeviceBuffe
     DeviceBuffer::uninitialized(sz).unwrap()
 }
 
+#[cfg(feature = "hip")]
+#[inline]
+unsafe fn alloc_hip_uninit<T: UniversalCopy>(sz: usize, dev: u8) -> HipBuffer<T> {
+    let _ctx = Device::HIP(dev).get_context();
+    HipBuffer::alloc_uninit(sz)
+}
+
 #[cfg(feature = "metal")]
 #[inline]
 fn alloc_metal_uninit<T: UniversalCopy>(sz: usize, dev: u8) -> metal::Buffer {
@@ -306,6 +375,10 @@ impl<T: UniversalCopy> UVecInternal<T> {
             CUDA(c) => {
                 self.data_cuda[c as usize] = Some(alloc_cuda_uninit(self.capacity, c));
             }
+            #[cfg(feature = "hip")]
+            HIP(h) => {
+                self.data_hip[h as usize] = Some(alloc_hip_uninit(self.capacity, h));
+            }
             #[cfg(feature = "metal")]
             Metal(m) => {
                 self.data_metal[m as usize] = Some(alloc_metal_uninit::<T>(self.capacity, m));
@@ -328,6 +401,10 @@ impl<T: UniversalCopy> UVecInternal<T> {
         self.data_cpu = None;
         #[cfg(feature = "cuda")]
         for d in &mut self.data_cuda {
+            *d = None;
+        }
+        #[cfg(feature = "hip")]
+        for d in &mut self.data_hip {
             *d = None;
         }
         #[cfg(feature = "metal")]
@@ -371,6 +448,22 @@ impl<T: UniversalCopy> UVecInternal<T> {
                     .copy_from(&old.index(..self.len))
                     .unwrap();
             }
+            #[cfg(feature = "hip")]
+            HIP(h) => {
+                let _ctx = HIP(h).get_context();
+                let h = h as usize;
+                let old = self.data_hip[h].take().unwrap();
+                let byte_len = self.len * std::mem::size_of::<T>();
+                self.drop_all_buf();
+                self.alloc_uninitialized(device);
+                let err = super::hip_ffi::hipMemcpy(
+                    self.data_hip[h].as_ref().unwrap().as_mut_ptr() as *mut std::os::raw::c_void,
+                    old.as_ptr() as *const std::os::raw::c_void,
+                    byte_len,
+                    super::hip_ffi::hipMemcpyDeviceToDevice,
+                );
+                super::hip_ffi::check_hip(err, "hipMemcpy D2D realloc");
+            }
             #[cfg(feature = "metal")]
             Metal(m) => {
                 let m = m as usize;
@@ -406,6 +499,8 @@ impl<T: UniversalCopy> UVecInternal<T> {
             CPU => self.data_cpu.is_none(),
             #[cfg(feature = "cuda")]
             CUDA(c) => self.data_cuda[c as usize].is_none(),
+            #[cfg(feature = "hip")]
+            HIP(h) => self.data_hip[h as usize].is_none(),
             #[cfg(feature = "metal")]
             Metal(m) => self.data_metal[m as usize].is_none(),
         };
@@ -462,6 +557,52 @@ impl<T: UniversalCopy> UVecInternal<T> {
                     .copy_to(&mut c2_mut.index(..self.len))
                     .unwrap();
             }
+            // HIP device copies
+            #[cfg(feature = "hip")]
+            (CPU, HIP(h)) => {
+                let _ctx = HIP(h).get_context();
+                let h = h as usize;
+                unsafe {
+                    let err = super::hip_ffi::hipMemcpy(
+                        self.data_hip[h].as_ref().unwrap().as_mut_ptr() as *mut std::os::raw::c_void,
+                        self.data_cpu.as_ref().unwrap().as_ptr() as *const std::os::raw::c_void,
+                        byte_len,
+                        super::hip_ffi::hipMemcpyHostToDevice,
+                    );
+                    super::hip_ffi::check_hip(err, "hipMemcpy H2D schedule");
+                }
+            }
+            #[cfg(feature = "hip")]
+            (HIP(h), CPU) => {
+                let _ctx = HIP(h).get_context();
+                let h = h as usize;
+                unsafe {
+                    let err = super::hip_ffi::hipMemcpy(
+                        self.data_cpu.as_mut().unwrap().as_mut_ptr() as *mut std::os::raw::c_void,
+                        self.data_hip[h].as_ref().unwrap().as_ptr() as *const std::os::raw::c_void,
+                        byte_len,
+                        super::hip_ffi::hipMemcpyDeviceToHost,
+                    );
+                    super::hip_ffi::check_hip(err, "hipMemcpy D2H schedule");
+                    let err = super::hip_ffi::hipDeviceSynchronize();
+                    super::hip_ffi::check_hip(err, "hipDeviceSynchronize after D2H");
+                }
+            }
+            #[cfg(feature = "hip")]
+            (HIP(h1), HIP(h2)) => {
+                let _ctx = HIP(h2).get_context();
+                let (h1, h2) = (h1 as usize, h2 as usize);
+                assert_ne!(h1, h2);
+                unsafe {
+                    let err = super::hip_ffi::hipMemcpy(
+                        self.data_hip[h2].as_ref().unwrap().as_mut_ptr() as *mut std::os::raw::c_void,
+                        self.data_hip[h1].as_ref().unwrap().as_ptr() as *const std::os::raw::c_void,
+                        byte_len,
+                        super::hip_ffi::hipMemcpyDeviceToDevice,
+                    );
+                    super::hip_ffi::check_hip(err, "hipMemcpy D2D schedule");
+                }
+            }
             // Metal with shared memory - CPU and Metal can access the same memory
             #[cfg(feature = "metal")]
             (CPU, Metal(m)) => {
@@ -505,6 +646,21 @@ impl<T: UniversalCopy> UVecInternal<T> {
             (CUDA(_), Metal(_)) | (Metal(_), CUDA(_)) => {
                 panic!(
                     "Direct copy between CUDA and Metal devices is not supported. \
+                        Please stage through CPU."
+                );
+            }
+            // Cross-device copies involving HIP and other GPU backends
+            #[cfg(all(feature = "hip", feature = "cuda"))]
+            (HIP(_), CUDA(_)) | (CUDA(_), HIP(_)) => {
+                panic!(
+                    "Direct copy between HIP and CUDA devices is not supported. \
+                        Please stage through CPU."
+                );
+            }
+            #[cfg(all(feature = "hip", feature = "metal"))]
+            (HIP(_), Metal(_)) | (Metal(_), HIP(_)) => {
+                panic!(
+                    "Direct copy between HIP and Metal devices is not supported. \
                         Please stage through CPU."
                 );
             }
@@ -576,6 +732,23 @@ impl<T: UniversalCopy> UVec<T> {
                     .unwrap();
                 CurrentContext::synchronize().unwrap();
                 ret[0]
+            }
+            #[cfg(feature = "hip")]
+            HIP(h) => {
+                let _ctx = HIP(h).get_context();
+                let mut ret: T = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+                unsafe {
+                    let err = super::hip_ffi::hipMemcpy(
+                        &mut ret as *mut T as *mut std::os::raw::c_void,
+                        intl.data_hip[h as usize].as_ref().unwrap().as_ptr().add(idx) as *const std::os::raw::c_void,
+                        std::mem::size_of::<T>(),
+                        super::hip_ffi::hipMemcpyDeviceToHost,
+                    );
+                    super::hip_ffi::check_hip(err, "hipMemcpy D2H get");
+                    let err = super::hip_ffi::hipDeviceSynchronize();
+                    super::hip_ffi::check_hip(err, "hipDeviceSynchronize after get");
+                }
+                ret
             }
             #[cfg(feature = "metal")]
             Metal(m) => {
@@ -882,6 +1055,8 @@ impl<T: UniversalCopy> AsUPtr<T> for UVec<T> {
                 .unwrap()
                 .as_device_ptr()
                 .as_ptr(),
+            #[cfg(feature = "hip")]
+            HIP(h) => intl.data_hip[h as usize].as_ref().unwrap().as_ptr(),
             #[cfg(feature = "metal")]
             Metal(m) => intl.data_metal[m as usize].as_ref().unwrap().contents() as *const T,
         }
@@ -905,6 +1080,8 @@ impl<T: UniversalCopy> AsUPtrMut<T> for UVec<T> {
                 .unwrap()
                 .as_device_ptr()
                 .as_mut_ptr(),
+            #[cfg(feature = "hip")]
+            HIP(h) => intl.data_hip[h as usize].as_ref().unwrap().as_mut_ptr(),
             #[cfg(feature = "metal")]
             Metal(m) => intl.data_metal[m as usize].as_ref().unwrap().contents() as *mut T,
         }
@@ -979,6 +1156,26 @@ impl<T: UniversalCopy> Clone for UVecInternal<T> {
             }
             data_cuda
         };
+        #[cfg(feature = "hip")]
+        let data_hip = unsafe {
+            let mut data_hip: [Option<HipBuffer<T>>; MAX_NUM_HIP_DEVICES] = Default::default();
+            for i in 0..MAX_NUM_HIP_DEVICES {
+                if valid_flag[Device::HIP(i as u8).to_id()] {
+                    let _ctx = Device::HIP(i as u8).get_context();
+                    let new_buf = alloc_hip_uninit(self.capacity, i as u8);
+                    let byte_len = self.len * std::mem::size_of::<T>();
+                    let err = super::hip_ffi::hipMemcpy(
+                        new_buf.as_mut_ptr() as *mut std::os::raw::c_void,
+                        self.data_hip[i].as_ref().unwrap().as_ptr() as *const std::os::raw::c_void,
+                        byte_len,
+                        super::hip_ffi::hipMemcpyDeviceToDevice,
+                    );
+                    super::hip_ffi::check_hip(err, "hipMemcpy D2D clone");
+                    data_hip[i] = Some(new_buf);
+                }
+            }
+            data_hip
+        };
         #[cfg(feature = "metal")]
         let data_metal = {
             let mut data_metal: [Option<metal::Buffer>; MAX_NUM_METAL_DEVICES] = Default::default();
@@ -1003,6 +1200,8 @@ impl<T: UniversalCopy> Clone for UVecInternal<T> {
             data_cpu,
             #[cfg(feature = "cuda")]
             data_cuda,
+            #[cfg(feature = "hip")]
+            data_hip,
             #[cfg(feature = "metal")]
             data_metal,
             valid_flag,

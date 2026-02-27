@@ -321,3 +321,49 @@ impl Default for MetalBuild {
 pub fn cl_metal() -> MetalBuild {
     MetalBuild::new()
 }
+
+/// Initialize a HIP compiler (`hipcc`) for AMD GPU targets.
+///
+/// Uses `hipcc` to compile `.hip.cpp` files for AMD GPUs (RDNA/CDNA).
+/// Target architectures can be controlled via the `UCC_HIP_TARGETS` environment
+/// variable (comma-separated, e.g. `gfx1030,gfx1100`). Defaults to
+/// `gfx1030` (RDNA2) and `gfx1100` (RDNA3).
+///
+/// # Example
+///
+/// ```ignore
+/// let mut cl = ucc::cl_hip();
+/// cl.debug(false).opt_level(3);
+/// cl.file("csrc/kernel.hip.cpp");
+/// cl.compile("myhip");
+/// ```
+pub fn cl_hip() -> Build {
+    println!("cargo:rerun-if-env-changed=UCC_HIP_TARGETS");
+    let targets = match env::var("UCC_HIP_TARGETS") {
+        Ok(v) if !v.is_empty() => v.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>(),
+        _ => vec!["gfx1030".to_string(), "gfx1100".to_string()],
+    };
+
+    let mut builder = Build::new();
+    builder
+        .cpp(true)
+        .compiler("hipcc")
+        .flag("-Wall")
+        .flag("-std=c++14");
+
+    for target in &targets {
+        builder.flag(&format!("--offload-arch={}", target));
+    }
+
+    builder.out_dir(
+        env::var_os("OUT_DIR")
+            .map(|v| {
+                let mut v = PathBuf::from(v);
+                v.push("ucc_hip");
+                v
+            })
+            .unwrap(),
+    );
+    add_definitions(&mut builder);
+    builder
+}

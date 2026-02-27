@@ -243,6 +243,11 @@ pub fn bindgen(source_list: impl IntoIterator<Item = impl AsRef<Path>>, dest: im
                 .entry(&f.raw_name[..f.raw_name.len() - 5])
                 .or_default()
                 .push(f);
+        } else if f.raw_name.ends_with("_hip") {
+            ufuncs
+                .entry(&f.raw_name[..f.raw_name.len() - 4])
+                .or_default()
+                .push(f);
         } else if f.raw_name.ends_with("_metal") {
             ufuncs
                 .entry(&f.raw_name[..f.raw_name.len() - 6])
@@ -286,6 +291,14 @@ pub fn bindgen(source_list: impl IntoIterator<Item = impl AsRef<Path>>, dest: im
                 quote! {
                     #[cfg(feature = "cuda")]
                     ulib::Device::CUDA(_devid) => {
+                        let _context = device.get_context();
+                        unsafe { ffi::#fname(#(#calls),*) }
+                    }
+                }
+            } else if f.raw_name.ends_with("_hip") {
+                quote! {
+                    #[cfg(feature = "hip")]
+                    ulib::Device::HIP(_devid) => {
                         let _context = device.get_context();
                         unsafe { ffi::#fname(#(#calls),*) }
                     }

@@ -20,11 +20,23 @@ fn main() {
         cl_cuda
     };
 
+    #[cfg(feature = "hip")]
+    let cl_hip = {
+        let mut cl_hip = ucc::cl_hip();
+        cl_hip.debug(false).opt_level(3).file("csrc/memfill.hip.cpp");
+        cl_hip.compile("ulibhip");
+        println!("cargo:rustc-link-lib=static=ulibhip");
+        println!("cargo:rustc-link-lib=dylib=amdhip64");
+        cl_hip
+    };
+
     ucc::bindgen(
         [
             "csrc/memfill.cpp",
             #[cfg(feature = "cuda")]
             "csrc/memfill.cu",
+            #[cfg(feature = "hip")]
+            "csrc/memfill.hip.cpp",
         ],
         "memfill.rs",
     );
@@ -34,5 +46,7 @@ fn main() {
         &cl_cpp,
         #[cfg(feature = "cuda")]
         &cl_cuda,
+        #[cfg(feature = "hip")]
+        &cl_hip,
     ]);
 }

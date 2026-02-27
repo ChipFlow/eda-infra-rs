@@ -22,7 +22,7 @@ const u64 u64_MAX = ~(u64)0;
 typedef float f32;
 typedef double f64;
 
-#ifdef __NVCC__
+#if defined(__NVCC__) || defined(__HIP_DEVICE_COMPILE__)
 #include <math_constants.h>
 #define f32_NAN nanf("")
 #define f64_NAN nan("")

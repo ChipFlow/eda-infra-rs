@@ -23,6 +23,9 @@ pub extern crate cust;
 #[cfg(feature = "metal")]
 pub extern crate metal;
 
+#[cfg(feature = "hip")]
+mod hip_ffi;
+
 /// The derive macro for types that can be safely
 /// bit-copied between all heterogeneous devices.
 pub use ulib_derive::UniversalCopy;
@@ -42,25 +45,34 @@ use cust::memory::DeviceCopy;
 #[cfg(feature = "cuda")]
 pub const MAX_NUM_CUDA_DEVICES: usize = 4;
 
+/// The maximum number of HIP (AMD) devices.
+#[cfg(feature = "hip")]
+pub const MAX_NUM_HIP_DEVICES: usize = 4;
+
 /// The maximum number of Metal devices (typically 1 on Mac).
 #[cfg(feature = "metal")]
 pub const MAX_NUM_METAL_DEVICES: usize = 1;
 
-/// The maximum number of devices (CUDA + Metal + CPU).
-#[cfg(all(feature = "cuda", feature = "metal"))]
-pub const MAX_DEVICES: usize = MAX_NUM_CUDA_DEVICES + MAX_NUM_METAL_DEVICES + 1;
+// Per-backend device counts (0 when backend is disabled).
+#[cfg(feature = "cuda")]
+const CUDA_DEVICE_COUNT: usize = MAX_NUM_CUDA_DEVICES;
+#[cfg(not(feature = "cuda"))]
+const CUDA_DEVICE_COUNT: usize = 0;
 
-/// The maximum number of devices (CUDA + CPU).
-#[cfg(all(feature = "cuda", not(feature = "metal")))]
-pub const MAX_DEVICES: usize = MAX_NUM_CUDA_DEVICES + 1;
+#[cfg(feature = "hip")]
+const HIP_DEVICE_COUNT: usize = MAX_NUM_HIP_DEVICES;
+#[cfg(not(feature = "hip"))]
+const HIP_DEVICE_COUNT: usize = 0;
 
-/// The maximum number of devices (Metal + CPU).
-#[cfg(all(feature = "metal", not(feature = "cuda")))]
-pub const MAX_DEVICES: usize = MAX_NUM_METAL_DEVICES + 1;
+#[cfg(feature = "metal")]
+const METAL_DEVICE_COUNT: usize = MAX_NUM_METAL_DEVICES;
+#[cfg(not(feature = "metal"))]
+const METAL_DEVICE_COUNT: usize = 0;
 
-/// The maximum number of devices (CPU only).
-#[cfg(all(not(feature = "cuda"), not(feature = "metal")))]
-pub const MAX_DEVICES: usize = 1;
+/// The maximum number of devices across all backends + CPU.
+///
+/// Device ID layout: `[CPU=0] [CUDA 1..N] [HIP after CUDA] [Metal last]`
+pub const MAX_DEVICES: usize = 1 + CUDA_DEVICE_COUNT + HIP_DEVICE_COUNT + METAL_DEVICE_COUNT;
 
 /// All supported device types.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -70,6 +82,9 @@ pub enum Device {
     /// The CUDA device type with a CUDA device index.
     #[cfg(feature = "cuda")]
     CUDA(u8 /* device id */),
+    /// The HIP (AMD GPU) device type with a device index.
+    #[cfg(feature = "hip")]
+    HIP(u8 /* device id */),
     /// The Metal device type with a Metal device index.
     #[cfg(feature = "metal")]
     Metal(u8 /* device id */),
@@ -88,16 +103,21 @@ pub struct DeviceContext {
     #[cfg(feature = "cuda")]
     #[allow(dead_code)]
     cuda_context: Option<cust::context::Context>,
+    #[cfg(feature = "hip")]
+    #[allow(dead_code)]
+    hip_device_id: Option<u8>,
     #[cfg(feature = "metal")]
     #[allow(dead_code)]
     metal_device: Option<metal::Device>,
 }
 
+/// Base offset for HIP device IDs in the unified device ID space.
+#[cfg(feature = "hip")]
+const HIP_DEVICE_ID_BASE: usize = 1 + CUDA_DEVICE_COUNT;
+
 /// Base offset for Metal device IDs in the unified device ID space.
-#[cfg(all(feature = "metal", feature = "cuda"))]
-const METAL_DEVICE_ID_BASE: usize = MAX_NUM_CUDA_DEVICES + 1;
-#[cfg(all(feature = "metal", not(feature = "cuda")))]
-const METAL_DEVICE_ID_BASE: usize = 1;
+#[cfg(feature = "metal")]
+const METAL_DEVICE_ID_BASE: usize = 1 + CUDA_DEVICE_COUNT + HIP_DEVICE_COUNT;
 
 impl Device {
     #[inline]
@@ -112,6 +132,14 @@ impl Device {
                     "invalid cuda device id"
                 );
                 c as usize + 1
+            }
+            #[cfg(feature = "hip")]
+            HIP(h) => {
+                assert!(
+                    (h as usize) < MAX_NUM_HIP_DEVICES,
+                    "invalid hip device id"
+                );
+                HIP_DEVICE_ID_BASE + h as usize
             }
             #[cfg(feature = "metal")]
             Metal(m) => {
@@ -131,6 +159,10 @@ impl Device {
             0 => CPU,
             #[cfg(feature = "cuda")]
             c @ 1..=MAX_NUM_CUDA_DEVICES => CUDA(c as u8 - 1),
+            #[cfg(feature = "hip")]
+            h if h >= HIP_DEVICE_ID_BASE && h < HIP_DEVICE_ID_BASE + MAX_NUM_HIP_DEVICES => {
+                HIP((h - HIP_DEVICE_ID_BASE) as u8)
+            }
             #[cfg(feature = "metal")]
             m if m >= METAL_DEVICE_ID_BASE && m < METAL_DEVICE_ID_BASE + MAX_NUM_METAL_DEVICES => {
                 Metal((m - METAL_DEVICE_ID_BASE) as u8)
@@ -148,6 +180,8 @@ impl Device {
             CPU => DeviceContext {
                 #[cfg(feature = "cuda")]
                 cuda_context: None,
+                #[cfg(feature = "hip")]
+                hip_device_id: None,
                 #[cfg(feature = "metal")]
                 metal_device: None,
             },
@@ -156,13 +190,29 @@ impl Device {
                 cuda_context: Some(
                     cust::context::Context::new(CUDA_DEVICES[c as usize].0).unwrap(),
                 ),
+                #[cfg(feature = "hip")]
+                hip_device_id: None,
                 #[cfg(feature = "metal")]
                 metal_device: None,
             },
+            #[cfg(feature = "hip")]
+            HIP(h) => {
+                let err = unsafe { hip_ffi::hipSetDevice(h as std::os::raw::c_int) };
+                hip_ffi::check_hip(err, "hipSetDevice");
+                DeviceContext {
+                    #[cfg(feature = "cuda")]
+                    cuda_context: None,
+                    hip_device_id: Some(h),
+                    #[cfg(feature = "metal")]
+                    metal_device: None,
+                }
+            }
             #[cfg(feature = "metal")]
             Metal(m) => DeviceContext {
                 #[cfg(feature = "cuda")]
                 cuda_context: None,
+                #[cfg(feature = "hip")]
+                hip_device_id: None,
                 metal_device: Some(METAL_DEVICES[m as usize].clone()),
             },
         }
@@ -171,6 +221,7 @@ impl Device {
     /// Synchronize all calculations on this device.
     ///
     /// Does nothing for CPU. Calls context synchronize for CUDA.
+    /// For HIP, calls hipDeviceSynchronize.
     /// For Metal, waits for command buffer completion.
     #[inline]
     pub fn synchronize(self) {
@@ -181,6 +232,13 @@ impl Device {
             CUDA(c) => {
                 let _context = cust::context::Context::new(CUDA_DEVICES[c as usize].0).unwrap();
                 cust::context::CurrentContext::synchronize().unwrap();
+            }
+            #[cfg(feature = "hip")]
+            HIP(h) => {
+                let err = unsafe { hip_ffi::hipSetDevice(h as std::os::raw::c_int) };
+                hip_ffi::check_hip(err, "hipSetDevice");
+                let err = unsafe { hip_ffi::hipDeviceSynchronize() };
+                hip_ffi::check_hip(err, "hipDeviceSynchronize");
             }
             #[cfg(feature = "metal")]
             Metal(_m) => {
@@ -290,6 +348,20 @@ lazy_static! {
 
     /// The number of Metal devices.
     pub static ref NUM_METAL_DEVICES: usize = METAL_DEVICES.len();
+}
+
+#[cfg(feature = "hip")]
+lazy_static! {
+    /// The number of HIP (AMD GPU) devices detected.
+    pub static ref NUM_HIP_DEVICES: usize = {
+        let mut count: std::os::raw::c_int = 0;
+        let err = unsafe { hip_ffi::hipGetDeviceCount(&mut count) };
+        if err != hip_ffi::HIP_SUCCESS {
+            0
+        } else {
+            (count as usize).min(MAX_NUM_HIP_DEVICES)
+        }
+    };
 }
 
 use std::mem::size_of;
@@ -437,6 +509,48 @@ pub unsafe fn copy<T: UniversalCopy>(
                 DeviceSlice::from_raw_parts(DevicePointer::from_raw(ptr_src as CUdeviceptr), count);
             device_slice_dest.copy_from(&device_slice_src).unwrap();
         }
+        // HIP device copies
+        #[cfg(feature = "hip")]
+        (HIP(h), CPU) => {
+            let _ctx = HIP(h).get_context();
+            let err = unsafe {
+                hip_ffi::hipMemcpy(
+                    ptr_dest as *mut std::os::raw::c_void,
+                    ptr_src as *const std::os::raw::c_void,
+                    count * size_of::<T>(),
+                    hip_ffi::hipMemcpyDeviceToHost,
+                )
+            };
+            hip_ffi::check_hip(err, "hipMemcpy D2H");
+            let err = unsafe { hip_ffi::hipDeviceSynchronize() };
+            hip_ffi::check_hip(err, "hipDeviceSynchronize after D2H");
+        }
+        #[cfg(feature = "hip")]
+        (CPU, HIP(h)) => {
+            let _ctx = HIP(h).get_context();
+            let err = unsafe {
+                hip_ffi::hipMemcpy(
+                    ptr_dest as *mut std::os::raw::c_void,
+                    ptr_src as *const std::os::raw::c_void,
+                    count * size_of::<T>(),
+                    hip_ffi::hipMemcpyHostToDevice,
+                )
+            };
+            hip_ffi::check_hip(err, "hipMemcpy H2D");
+        }
+        #[cfg(feature = "hip")]
+        (HIP(h1), HIP(_h2)) => {
+            let _ctx = HIP(h1).get_context();
+            let err = unsafe {
+                hip_ffi::hipMemcpy(
+                    ptr_dest as *mut std::os::raw::c_void,
+                    ptr_src as *const std::os::raw::c_void,
+                    count * size_of::<T>(),
+                    hip_ffi::hipMemcpyDeviceToDevice,
+                )
+            };
+            hip_ffi::check_hip(err, "hipMemcpy D2D");
+        }
         // Metal with shared memory (Apple Silicon UMA) - CPU and GPU share memory
         // so copies are just pointer copies. The pointers already point to the same
         // physical memory when using MTLResourceStorageModeShared.
@@ -451,6 +565,21 @@ pub unsafe fn copy<T: UniversalCopy>(
         (CUDA(_), Metal(_)) | (Metal(_), CUDA(_)) => {
             panic!(
                 "Direct copy between CUDA and Metal devices is not supported. \
+                    Please stage through CPU."
+            );
+        }
+        // Cross-device copies involving HIP and other GPU backends
+        #[cfg(all(feature = "hip", feature = "cuda"))]
+        (HIP(_), CUDA(_)) | (CUDA(_), HIP(_)) => {
+            panic!(
+                "Direct copy between HIP and CUDA devices is not supported. \
+                    Please stage through CPU."
+            );
+        }
+        #[cfg(all(feature = "hip", feature = "metal"))]
+        (HIP(_), Metal(_)) | (Metal(_), HIP(_)) => {
+            panic!(
+                "Direct copy between HIP and Metal devices is not supported. \
                     Please stage through CPU."
             );
         }

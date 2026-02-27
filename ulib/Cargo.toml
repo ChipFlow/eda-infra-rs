@@ -26,6 +26,7 @@ ulib_zeroable_derive = { version = "0.2.0", path = "../ulib_zeroable_derive" }
 
 [features]
 cuda = ["dep:cust", "dep:cust_raw", "ulib-derive/cuda"]
+hip = []
 metal = ["dep:metal", "dep:objc", "dep:block"]
 rayon = ["dep:rayon"]
 
