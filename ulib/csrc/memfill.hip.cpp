@@ -53,3 +53,53 @@ void ulib_fill_memory_anybyte_hip(u8 *a, usize len, const u8 *val, usize size) {
     a, len, val, size
     );
 }
+
+// ---- HIP runtime FFI wrappers ----
+// On NVIDIA backend (HIP_PLATFORM=nvidia), HIP runtime functions are
+// header-only wrappers around CUDA; no libamdhip64.so exists.  Provide
+// compiled wrapper symbols so Rust FFI can link without that library.
+
+extern "C"
+hipError_t hip_ffi_malloc(void **ptr, size_t size) {
+  return hipMalloc(ptr, size);
+}
+
+extern "C"
+hipError_t hip_ffi_free(void *ptr) {
+  return hipFree(ptr);
+}
+
+extern "C"
+hipError_t hip_ffi_memcpy(void *dst, const void *src, size_t size, int kind) {
+  return hipMemcpy(dst, src, size, (hipMemcpyKind)kind);
+}
+
+extern "C"
+hipError_t hip_ffi_memset(void *ptr, int value, size_t size) {
+  return hipMemset(ptr, value, size);
+}
+
+extern "C"
+hipError_t hip_ffi_device_synchronize() {
+  return hipDeviceSynchronize();
+}
+
+extern "C"
+hipError_t hip_ffi_get_device_count(int *count) {
+  return hipGetDeviceCount(count);
+}
+
+extern "C"
+hipError_t hip_ffi_set_device(int device_id) {
+  return hipSetDevice(device_id);
+}
+
+extern "C"
+const char *hip_ffi_get_error_string(hipError_t error) {
+  return hipGetErrorString(error);
+}
+
+extern "C"
+hipError_t hip_ffi_device_get_attribute(int *value, int attr, int device) {
+  return hipDeviceGetAttribute(value, (hipDeviceAttribute_t)attr, device);
+}

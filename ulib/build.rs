@@ -26,10 +26,18 @@ fn main() {
         cl_hip.debug(false).opt_level(3).file("csrc/memfill.hip.cpp");
         cl_hip.compile("ulibhip");
         println!("cargo:rustc-link-lib=static=ulibhip");
-        println!("cargo:rustc-link-lib=dylib=amdhip64");
-        // Add ROCm library search path (default /opt/rocm/lib).
-        let rocm_path = std::env::var("ROCM_PATH").unwrap_or_else(|_| "/opt/rocm".to_string());
-        println!("cargo:rustc-link-search=native={}/lib", rocm_path);
+        // On AMD backend, HIP runtime is in libamdhip64; on NVIDIA backend,
+        // hipcc links against cudart. The hip_ffi_* wrapper functions compiled
+        // into ulibhip handle both cases — link the appropriate runtime.
+        if std::env::var("HIP_PLATFORM").as_deref() == Ok("nvidia") {
+            println!("cargo:rustc-link-lib=dylib=cudart");
+        } else {
+            println!("cargo:rustc-link-lib=dylib=amdhip64");
+            let rocm_path = std::env::var("ROCM_PATH")
+                .unwrap_or_else(|_| "/opt/rocm".to_string());
+            println!("cargo:rustc-link-search=native={}/lib", rocm_path);
+        }
+        println!("cargo:rerun-if-env-changed=HIP_PLATFORM");
         cl_hip
     };
 
