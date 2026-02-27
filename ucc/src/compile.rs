@@ -365,11 +365,24 @@ pub fn cl_hip() -> Build {
     };
 
     let mut builder = Build::new();
-    builder
-        .cpp(true)
-        .compiler("hipcc")
-        .flag("-Wall")
-        .flag("-std=c++14");
+    if is_nvidia {
+        // When HIP targets NVIDIA, hipcc wraps nvcc. Use .cuda(true) so the
+        // cc crate wraps host-compiler flags (like -ffunction-sections) with
+        // -Xcompiler, which nvcc requires.
+        builder
+            .cuda(true)
+            .compiler("hipcc")
+            .flag("-Xcompiler")
+            .flag("-Wall")
+            .flag("-std=c++14");
+    } else {
+        // On AMD, hipcc is a clang wrapper — GCC-like flags work directly.
+        builder
+            .cpp(true)
+            .compiler("hipcc")
+            .flag("-Wall")
+            .flag("-std=c++14");
+    }
 
     for target in &targets {
         if is_nvidia {
