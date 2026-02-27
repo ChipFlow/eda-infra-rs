@@ -322,12 +322,16 @@ pub fn cl_metal() -> MetalBuild {
     MetalBuild::new()
 }
 
-/// Initialize a HIP compiler (`hipcc`) for AMD GPU targets.
+/// Initialize a HIP compiler (`hipcc`) for GPU targets.
 ///
-/// Uses `hipcc` to compile `.hip.cpp` files for AMD GPUs (RDNA/CDNA).
+/// Uses `hipcc` to compile `.hip.cpp` files. Supports both AMD (default)
+/// and NVIDIA backends. When `HIP_PLATFORM=nvidia`, hipcc wraps nvcc and
+/// AMD-specific `--offload-arch` flags are skipped.
+///
 /// Target architectures can be controlled via the `UCC_HIP_TARGETS` environment
-/// variable (comma-separated, e.g. `gfx1030,gfx1100`). Defaults to
-/// `gfx1030` (RDNA2) and `gfx1100` (RDNA3).
+/// variable (comma-separated, e.g. `gfx1030,gfx1100` for AMD, or `sm_80,sm_89`
+/// for NVIDIA). Set to `none` to skip architecture flags entirely. Defaults to
+/// `gfx1030` (RDNA2) and `gfx1100` (RDNA3) on AMD, or no arch flags on NVIDIA.
 ///
 /// # Example
 ///
@@ -339,9 +343,25 @@ pub fn cl_metal() -> MetalBuild {
 /// ```
 pub fn cl_hip() -> Build {
     println!("cargo:rerun-if-env-changed=UCC_HIP_TARGETS");
+    println!("cargo:rerun-if-env-changed=HIP_PLATFORM");
+
+    let is_nvidia = env::var("HIP_PLATFORM")
+        .map(|v| v == "nvidia")
+        .unwrap_or(false);
+
     let targets = match env::var("UCC_HIP_TARGETS") {
+        // Explicit "none" means skip arch flags entirely.
+        Ok(v) if v.trim().eq_ignore_ascii_case("none") => vec![],
         Ok(v) if !v.is_empty() => v.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>(),
-        _ => vec!["gfx1030".to_string(), "gfx1100".to_string()],
+        _ => {
+            if is_nvidia {
+                // On NVIDIA backend, let nvcc use default compute capability.
+                vec![]
+            } else {
+                // Default AMD targets: RDNA2 + RDNA3.
+                vec!["gfx1030".to_string(), "gfx1100".to_string()]
+            }
+        }
     };
 
     let mut builder = Build::new();
@@ -352,7 +372,17 @@ pub fn cl_hip() -> Build {
         .flag("-std=c++14");
 
     for target in &targets {
-        builder.flag(&format!("--offload-arch={}", target));
+        if is_nvidia {
+            // NVIDIA targets use -gencode syntax via hipcc.
+            builder
+                .flag("-gencode")
+                .flag(&format!(
+                    "arch=compute_{t},code=sm_{t}",
+                    t = target.trim_start_matches("sm_")
+                ));
+        } else {
+            builder.flag(&format!("--offload-arch={}", target));
+        }
     }
 
     builder.out_dir(
