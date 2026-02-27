@@ -27,6 +27,9 @@ fn main() {
         cl_hip.compile("ulibhip");
         println!("cargo:rustc-link-lib=static=ulibhip");
         println!("cargo:rustc-link-lib=dylib=amdhip64");
+        // Add ROCm library search path (default /opt/rocm/lib).
+        let rocm_path = std::env::var("ROCM_PATH").unwrap_or_else(|_| "/opt/rocm".to_string());
+        println!("cargo:rustc-link-search=native={}/lib", rocm_path);
         cl_hip
     };
 
