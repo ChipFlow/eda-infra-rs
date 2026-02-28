@@ -196,6 +196,13 @@ fn wirexpr(i: &[u8]) -> IResult<&[u8], Wirexpr> {
     use Wirexpr::*;
     use WirexprBasic::*;
     alt((
+        // unary NOT: ~wirexpr
+        map(
+            preceded(ws(char('~')), cut(wirexpr)),
+            |inner| Not(Box::new(inner)),
+        ),
+        // parenthesized expression: (expr)
+        delimited(ws(char('(')), cut(wirexpr), ws(char(')'))),
         // ident[int:int]
         map(
             pair(
@@ -235,6 +242,9 @@ fn wirexpr(i: &[u8]) -> IResult<&[u8], Wirexpr> {
                     match w {
                         Basic(basic) => v.push(basic),
                         Concat(ref mut v2) => v.append(v2),
+                        Not(_) => {
+                            panic!("NOT expression inside concatenation is not supported")
+                        }
                     }
                 }
                 Concat(v)

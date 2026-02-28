@@ -122,6 +122,7 @@ impl fmt::Display for Wirexpr {
         match self {
             Basic(b) => write!(f, "{}", b),
             Concat(v) => write!(f, "{{{}}}", v.iter().format(", ")),
+            Not(inner) => write!(f, "~({})", inner),
         }
     }
 }

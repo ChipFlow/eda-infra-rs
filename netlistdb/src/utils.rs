@@ -123,6 +123,7 @@ fn eval_expr_len(def_widths: &HashMap<CompactString, SVerilogRange>, expr: &Wire
     match expr {
         Basic(basic) => len_basic(def_widths, basic),
         Concat(v) => v.iter().map(|b| len_basic(def_widths, b)).sum(),
+        Not(inner) => eval_expr_len(def_widths, inner),
     }
 }
 
@@ -203,10 +204,17 @@ impl ModuleMap {
                             }
                         };
                         use Wirexpr::*;
-                        let has_vector = match expr {
-                            Basic(eb) => expr_basic_has_vector(eb),
-                            Concat(v) => v.iter().any(expr_basic_has_vector),
-                        };
+                        fn check_has_vector(
+                            expr: &Wirexpr,
+                            check: &dyn Fn(&WirexprBasic) -> bool,
+                        ) -> bool {
+                            match expr {
+                                Basic(eb) => check(eb),
+                                Concat(v) => v.iter().any(check),
+                                Not(inner) => check_has_vector(inner, check),
+                            }
+                        }
+                        let has_vector = check_has_vector(expr, &expr_basic_has_vector);
                         match has_vector {
                             true => Some((name.clone(), SVerilogRange(0, 0))),
                             false => None,
@@ -223,7 +231,7 @@ impl ModuleMap {
         }
     }
 
-    pub fn eval_expr<'a>(&'a self, expr: &'a Wirexpr) -> impl Iterator<Item = ExprBit<'a>> + 'a {
+    pub fn eval_expr<'a>(&'a self, expr: &'a Wirexpr) -> Box<dyn Iterator<Item = ExprBit<'a>> + 'a> {
         use Either::*;
         #[inline]
         fn eval_basic<'a>(
@@ -250,8 +258,9 @@ impl ModuleMap {
         }
         use Wirexpr::*;
         match expr {
-            Basic(basic) => Left(eval_basic(self, basic)),
-            Concat(v) => Right(v.iter().map(|b| eval_basic(self, b)).flatten()),
+            Basic(basic) => Box::new(eval_basic(self, basic)),
+            Concat(v) => Box::new(v.iter().map(|b| eval_basic(self, b)).flatten()),
+            Not(inner) => self.eval_expr(inner),
         }
     }
 

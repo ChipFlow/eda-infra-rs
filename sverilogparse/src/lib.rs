@@ -94,6 +94,9 @@ pub enum Wirexpr {
     /// Multiple basic components enclosed in curly braces.
     /// E.g. `{somepin, 1'b0, otherpin[0:7]}`.
     Concat(Vec<WirexprBasic>),
+    /// Unary NOT (bitwise inversion).
+    /// E.g. `~(somepin)` or `~somepin`.
+    Not(Box<Wirexpr>),
 }
 
 /// An assign operation.

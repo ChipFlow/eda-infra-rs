@@ -310,9 +310,16 @@ impl NetlistDB {
         }
 
         // connect assignments
+        let mut assign_inv_counter = 0usize;
         for assign in &m.assigns {
+            // Check if RHS is a NOT expression — synthesize INV cells
+            let (rhs_inner, is_not) = match &assign.rhs {
+                Wirexpr::Not(inner) => (inner.as_ref(), true),
+                other => (other, false),
+            };
+
             let len_lhs = mm.eval_expr_len(&assign.lhs);
-            let len_rhs = mm.eval_expr_len(&assign.rhs);
+            let len_rhs = mm.eval_expr_len(rhs_inner);
             if len_lhs != len_rhs {
                 clilog::error!(
                     NL_SV_INCOMP,
@@ -325,25 +332,75 @@ impl NetlistDB {
                 return None;
             }
 
-            for (lb, rb) in mm.eval_expr(&assign.lhs).zip(mm.eval_expr(&assign.rhs)) {
-                use ExprBit::*;
-                match (lb, rb) {
-                    (Var(nl, il), Var(nr, ir)) => {
-                        let l = self.get_or_insert_logic_pin(&hier, &nl, il);
-                        let r = self.get_or_insert_logic_pin(&hier, &nr, ir);
-                        net_sets.merge(l, r);
+            if is_not {
+                // Synthesize INV cells for each bit
+                let inv_macro: CompactString = "INV".into();
+                let pin_a: CompactString = "A".into();
+                let pin_y: CompactString = "Y".into();
+
+                for (lb, rb) in mm.eval_expr(&assign.lhs).zip(mm.eval_expr(rhs_inner)) {
+                    use ExprBit::*;
+                    match (lb, rb) {
+                        (Var(nl, il), Var(nr, ir)) => {
+                            let cell_name_str = format!("_assign_inv_{}", assign_inv_counter);
+                            assign_inv_counter += 1;
+                            let inv_hier = HierName {
+                                prev: hier_prev.clone(),
+                                cur: CompactString::from(cell_name_str),
+                            };
+
+                            self.insert_cell(inv_hier.clone(), inv_macro.clone());
+
+                            // Create output pin Y, connected to LHS net
+                            let y_id = self.get_or_insert_logic_pin(&inv_hier, &pin_y, None);
+                            self.logicpintypes[y_id] = LogicPinType::LeafCellPin;
+                            let l = self.get_or_insert_logic_pin(&hier, &nl, il);
+                            net_sets.merge(y_id, l);
+
+                            // Create input pin A, connected to RHS inner net
+                            let a_id = self.get_or_insert_logic_pin(&inv_hier, &pin_a, None);
+                            self.logicpintypes[a_id] = LogicPinType::LeafCellPin;
+                            let r = self.get_or_insert_logic_pin(&hier, &nr, ir);
+                            net_sets.merge(a_id, r);
+                        }
+                        (Var(nl, il), Const(c)) => {
+                            // ~const: invert the constant
+                            let l = self.get_or_insert_logic_pin(&hier, &nl, il);
+                            let inv_c = match c {
+                                0 => 1,
+                                1 => 0,
+                                _ => c, // x/z stay as-is
+                            };
+                            pin_assign_literal(net_sets, l, inv_c)?;
+                        }
+                        _ => {
+                            clilog::error!(NL_SV_LIT, "Bad NOT assign target.");
+                            return None;
+                        }
                     }
-                    (Var(nl, il), Const(c)) => {
-                        let l = self.get_or_insert_logic_pin(&hier, &nl, il);
-                        pin_assign_literal(net_sets, l, c)?;
-                    }
-                    (Const(c), Var(nr, ir)) => {
-                        let r = self.get_or_insert_logic_pin(&hier, &nr, ir);
-                        pin_assign_literal(net_sets, r, c)?;
-                    }
-                    _ => {
-                        clilog::error!(NL_SV_LIT, "Bad lit-lit assign.");
-                        return None;
+                }
+            } else {
+                // Normal assign — merge nets directly
+                for (lb, rb) in mm.eval_expr(&assign.lhs).zip(mm.eval_expr(&assign.rhs)) {
+                    use ExprBit::*;
+                    match (lb, rb) {
+                        (Var(nl, il), Var(nr, ir)) => {
+                            let l = self.get_or_insert_logic_pin(&hier, &nl, il);
+                            let r = self.get_or_insert_logic_pin(&hier, &nr, ir);
+                            net_sets.merge(l, r);
+                        }
+                        (Var(nl, il), Const(c)) => {
+                            let l = self.get_or_insert_logic_pin(&hier, &nl, il);
+                            pin_assign_literal(net_sets, l, c)?;
+                        }
+                        (Const(c), Var(nr, ir)) => {
+                            let r = self.get_or_insert_logic_pin(&hier, &nr, ir);
+                            pin_assign_literal(net_sets, r, c)?;
+                        }
+                        _ => {
+                            clilog::error!(NL_SV_LIT, "Bad lit-lit assign.");
+                            return None;
+                        }
                     }
                 }
             }

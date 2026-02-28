@@ -105,6 +105,37 @@ endmodule
 ");
 }
 
+const VERILOG_NOT_EXPR: &str = include_str!("not_expr.v");
+
+#[test]
+fn test_not_expr() {
+    clilog::init_stdout_simple_trace();
+    let parsed = SVerilog::parse_str(VERILOG_NOT_EXPR).expect("parse error");
+    println!("Parsed is: {parsed:?}");
+    println!("Restructure: \n{parsed}");
+    assert_eq!(
+        format!("{parsed}"),
+        "\
+module not_test(a, b, c, d, e);
+  input a;
+  output b;
+  input [3:0] c;
+  output [3:0] d;
+  output e;
+  wire a;
+  wire b;
+  wire [3:0] c;
+  wire [3:0] d;
+  wire e;
+
+  assign b = ~(a);
+  assign d = ~(c);
+  assign e = ~(escaped_name);
+endmodule
+"
+    );
+}
+
 #[test]
 fn test_allow_not_connected() {
     let parsed = SVerilog::parse_str(VERILOG_NOT_CONNECTED).expect("parse error");
